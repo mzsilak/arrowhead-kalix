@@ -1,5 +1,6 @@
 package se.arkalix.internal.net.http.client;
 
+import io.netty.handler.logging.LoggingHandler;
 import se.arkalix.util.annotation.Internal;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
@@ -31,15 +32,17 @@ public class NettyHttpClientConnectionInitializer extends ChannelInitializer<Soc
             return;
         }
         final var pipeline = ch.pipeline();
+
         SslHandler sslHandler = null;
         if (sslContext != null) {
             sslHandler = sslContext.newHandler(ch.alloc());
             pipeline.addLast(sslHandler);
         }
+
         pipeline
-            //.addLast(new LoggingHandler(LogLevel.INFO))
-            .addLast(new IdleStateHandler(30, 120, 0, TimeUnit.SECONDS)) // TODO: Make configurable.
-            .addLast(new HttpClientCodec()) // TODO: Make message size restrictions configurable.
+            .addLast(new LoggingHandler())
+            .addLast(new IdleStateHandler(30, 120, 0, TimeUnit.SECONDS))
+            .addLast(new HttpClientCodec())
             .addLast(new NettyHttpClientConnectionHandler(futureConnection, sslHandler));
     }
 }

@@ -1,128 +1,85 @@
 package se.arkalix.plugin;
 
-import se.arkalix.ArService;
 import se.arkalix.ArSystem;
-import se.arkalix.description.ServiceDescription;
+import se.arkalix.query.ServiceQuery;
 import se.arkalix.util.concurrent.Future;
+
+import java.util.Collections;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * An {@link ArSystem} plugin.
  * <p>
  * A plugin attaches to one or more systems in order to react to certain
- * system life-cycle events. Plugins could, for example, be designed to react
- * to services being added to a system by adding authentication mechanisms, or
- * to bring up services in response to file system events, among many other
- * possible examples. More then anything else, they provide a convenient means
- * of packaging and reusing complex behaviors that are frequently useful
- * together.
+ * life-cycle events. A plugin could, for example, modify {@link
+ * se.arkalix.ArService services} about to be {@link
+ * ArSystem#provide(se.arkalix.ArService) provided} by its system, react to
+ * services being {@link se.arkalix.ArServiceHandle#dismiss() dismissed}, or
+ * help resolve {@link ArSystem#consume() service consumption queries}.
+ * <p>
+ * At a technical level, implementations of this interface can be regarded as
+ * factory classes for creating {@link PluginAttached} instances via the {@link
+ * #attachTo(ArSystem, Map)} method each of them provides.
  */
+@SuppressWarnings("unused")
 public interface Plugin {
     /**
-     * Called to notify the plugin that it now is attached to an
-     * {@link ArSystem}.
+     * Names plugins, if any, this plugin depend on.
      * <p>
-     * This method is guaranteed to be called exactly once for every system the
-     * plugin is attached to.
+     * If a plugin depended upon would be not be explicitly {@link
+     * ArSystem.Builder#plugins(se.arkalix.plugin.Plugin...) provided} to the
+     * same system as this plugin, instances of the dependencies will be
+     * created automatically, if possible, and provided to the system in
+     * question. Automatic dependency creation is possible only if each
+     * dependency has either (1) a public static {@code instance()} method that
+     * returns an instance of the plugin, or (2) a public constructor that
+     * takes no arguments. Not having provided a dependency that cannot be
+     * created automatically will prevent the {@link ArSystem} in question from
+     * being instantiated at all.
      * <p>
-     * If this method throws an exception the plugin is detached and
-     * {@link #onDetach(Plug, Throwable)} is invoked with the exception.
-     *
-     * @param plug Plug, representing the plugin's connection to the system.
+     * Dependencies are always {@link #attachTo(ArSystem, Map)} attached}
+     * <i>before</i> the plugins that depend on them.
      */
-    default void onAttach(final Plug plug) throws Exception {}
-
-    /**
-     * Called to notify the plugin that it now is detached from its
-     * {@link ArSystem} and will receive no more notifications from it.
-     * <p>
-     * This event is caused either by (1) the {@link Plug#detach()} method of
-     * the {@link Plug} owned by this plugin was called, or (2) the
-     * {@link ArSystem} is being irreversibly shut down. The two scenarios
-     * can be told apart via the {@link Plug#isSystemShuttingDown()} method.
-     * This method is guaranteed to never be called more than once per attached
-     * system.
-     * <p>
-     * If this method throws an exception {@link #onDetach(Plug, Throwable)} is
-     * invoked with that exception.
-     *
-     * @param plug Plug, representing this plugin's connection to a system.
-     */
-    default void onDetach(final Plug plug) throws Exception {}
-
-    /**
-     * Called to notify the plugin that it was forcibly detached due to
-     * unexpectedly throwing an exception when one of its methods was called,
-     * or that {@link #onDetach(Plug)} threw an exception.
-     * <p>
-     * If this method throws an exception it will not be called again.
-     *
-     * @param plug  Plug, representing this plugin's connection to a system.
-     * @param cause The exception causing the plugin to be detached.
-     */
-    default void onDetach(final Plug plug, final Throwable cause) throws Exception {}
-
-    /**
-     * Called to notify the plugin that a new service is prepared for being
-     * provided by an attached {@link ArSystem}.
-     * <p>
-     * This method provides the only opportunity for this plugin to affect the
-     * internals of provided services. Note, however, that it being called does
-     * not guarantee that {@link #onServiceProvided(Plug, ServiceDescription)}
-     * will be called for the same {@code service}, as when this method is
-     * invoked it has not yet been verified if the {@code service} has been
-     * configured correctly or if its configuration clashes with an existing
-     * service. This method should <i>never</i> assume that services it is
-     * provided will be provided by the attached system in question.
-     * <p>
-     * If this method throws an exception the returned {@code Future} is failed
-     * with the same exception.
-     *
-     * @param plug    Plug, representing this plugin's connection to a system.
-     * @param service A description of the service being added.
-     * @return {@code Future} that must complete when this method is done
-     * modifying or reacting to the given {@code service} being provided. If
-     * the {@code Future} is completed with a fault, the service is never
-     * provided and the fault is relayed to the caller trying to cause the
-     * service to be provided.
-     */
-    default Future<?> onServicePrepared(final Plug plug, final ArService service) throws Exception {
-        return Future.done();
+    default Set<Class<? extends Plugin>> dependencies() {
+        return Collections.emptySet();
     }
 
     /**
-     * Called to notify the plugin that a new service is about to be provided
-     * by an attached {@link ArSystem}.
+     * Indication of when this {@code Plugin} should be attached in relation to
+     * to other such provided to the same {@link ArSystem}. Plugins with lower
+     * ordinals are loaded first.
      * <p>
-     * By the time this method is called, it is known that the {@code service}
-     * in question will be, or already is, provided by the system in question.
-     * Furthermore, {@link #onServiceDismissed(Plug, ServiceDescription)} is
-     * guaranteed to be called for every {@code service} this method is
-     * provided, given that the application is not shutdown abnormally.
+     * If this {@code Plugin} has any {@link #dependencies() dependencies}, it
+     * will be loaded after the plugins depended upon, irrespective of the
+     * ordinals those plugins state.
      * <p>
-     * If this method throws an exception the returned {@code Future} is failed
-     * with the same exception.
+     * Explicitly stating an ordinal by overriding this method will primarily
+     * be relevant to plugins that provide functionality indirectly depended
+     * upon by other plugins, or that indirectly depend on all other plugins.
+     * If, for example, a plugin performs {@link
+     * PluginAttached#onServiceQueried(ServiceQuery) service query resolution}, it might
+     * be relevant to ensure it is loaded before other plugins that may depend
+     * on it being available.
      *
-     * @param plug    Plug, representing this plugin's connection to a system.
-     * @param service A description of the service being added.
-     * @return {@code Future} that must complete when this method is done
-     * reacting to the given {@code service} being provided. If the
-     * {@code Future} is completed with a fault, the service is never provided
-     * and the fault is relayed to the caller trying to cause the service to be
-     * provided.
+     * @return Ordinal used for determining plugin {@link
+     * #attachTo(ArSystem, Map) attachment} order.
      */
-    default Future<?> onServiceProvided(final Plug plug, final ServiceDescription service) throws Exception {
-        return Future.done();
+    default int ordinal() {
+        return 0;
     }
 
     /**
-     * Called to notify the plugin that an existing service is about to be
-     * dismissed by an attached {@link ArSystem}.
-     * <p>
-     * If this method throws an exception the plugin is detached and
-     * {@link #onDetach(Plug, Throwable)} is invoked with the exception.
+     * Attaches plugin to given {@code system}.
      *
-     * @param plug    Plug, representing this plugin's connection to a system.
-     * @param service A description of the service being removed.
+     * @param system       System to which this plugin is attached.
+     * @param dependencies Mappings between the {@link #dependencies()
+     *                     dependencies} of this plugin who provided {@link
+     *                     PluginAttached#facade() facades} when attached.
+     * @return {@link Future} that, if successful, completes with an object
+     * useful for concretely handling the life-cycle events of the given
+     * {@code system}.
      */
-    default void onServiceDismissed(final Plug plug, final ServiceDescription service) throws Exception {}
+    Future<PluginAttached> attachTo(ArSystem system, Map<Class<? extends Plugin>, PluginFacade> dependencies)
+        throws Exception;
 }

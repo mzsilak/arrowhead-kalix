@@ -2,17 +2,63 @@ package se.arkalix;
 
 import se.arkalix.description.ServiceDescription;
 import se.arkalix.descriptor.InterfaceDescriptor;
+import se.arkalix.util.annotation.ThreadSafe;
 
-import java.util.*;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.stream.Stream;
 
 /**
- * A local service registry, maintaining descriptions of known remote services.
+ * A local service registry, maintaining descriptions of known remote services
+ * whose service registry entries have not yet expired.
  */
+@SuppressWarnings("unused")
 public class ArServiceCache {
-    private final ConcurrentSkipListSet<ServiceDescription> services =
-        new ConcurrentSkipListSet<>(new ServiceDescriptionComparator());
+    private final ConcurrentSkipListSet<ServiceDescription> services = new ConcurrentSkipListSet<>();
+    private final Duration entryLifetimeLimit;
+
+    private ArServiceCache(final Duration entryLifetimeLimit) {
+        this.entryLifetimeLimit = Objects.requireNonNull(entryLifetimeLimit, "Expected entryLifetimeLimit");
+    }
+
+    /**
+     * Creates a new service cache that will not hold on to provided service
+     * descriptions for longer than a default duration.
+     *
+     * @return New service cache.
+     */
+    public static ArServiceCache withDefaultEntryLifetimeLimit() {
+        return new ArServiceCache(Duration.ofMinutes(5));
+    }
+
+    /**
+     * Creates a new service cache that will not hold on to provided service
+     * descriptions for longer than specified by the given
+     * {@code entryLifetimeLimit}.
+     *
+     * @param entryLifetimeLimit Duration after which service descriptions
+     *                           added to this cache become stale and are
+     *                           removed, even if they explicitly specify a
+     *                           later {@link ServiceDescription#expiresAt()
+     *                           expiration time}.
+     * @return New service cache.
+     */
+    public static ArServiceCache withEntryLifetimeLimit(final Duration entryLifetimeLimit) {
+        return new ArServiceCache(entryLifetimeLimit);
+    }
+
+    /**
+     * Empties cache.
+     */
+    @ThreadSafe
+    public void clear() {
+        services.clear();
+    }
 
     /**
      * Gets stream of all services in cache matching given {@code name}.
@@ -20,8 +66,9 @@ public class ArServiceCache {
      * @param name Name to search for.
      * @return Stream of matching service descriptions.
      */
+    @ThreadSafe
     public Stream<ServiceDescription> getByName(final String name) {
-        return services.stream().filter(service -> service.name().equals(name));
+        return getAll().filter(service -> service.name().equals(name));
     }
 
     /**
@@ -32,6 +79,7 @@ public class ArServiceCache {
      * @param interfaces Interfaces to search for.
      * @return Stream of matching service descriptions.
      */
+    @ThreadSafe
     public Stream<ServiceDescription> getByNameAndInterfaces(
         final String name,
         final InterfaceDescriptor... interfaces)
@@ -47,11 +95,12 @@ public class ArServiceCache {
      * @param interfaces Interfaces to search for.
      * @return Stream of matching service descriptions.
      */
+    @ThreadSafe
     public Stream<ServiceDescription> getByNameAndInterfaces(
         final String name,
         final List<InterfaceDescriptor> interfaces)
     {
-        return services.stream().filter(service -> service.name().equals(name) &&
+        return getAll().filter(service -> service.name().equals(name) &&
             interfaces.stream().anyMatch(interfaces::contains));
     }
 
@@ -60,7 +109,11 @@ public class ArServiceCache {
      *
      * @return Stream of all services in cache.
      */
+    @ThreadSafe
     public Stream<ServiceDescription> getAll() {
+        final var now = Instant.now();
+        services.removeIf(service -> now.isAfter(service.expiresAt()) ||
+            now.isAfter(service.receivedAt().plus(entryLifetimeLimit)));
         return services.stream();
     }
 
@@ -69,6 +122,7 @@ public class ArServiceCache {
      *
      * @param services Services to update.
      */
+    @ThreadSafe
     public void update(final ServiceDescription... services) {
         update(Stream.of(services));
     }
@@ -78,6 +132,7 @@ public class ArServiceCache {
      *
      * @param services Services to update.
      */
+    @ThreadSafe
     public void update(final Collection<ServiceDescription> services) {
         update(services.stream());
     }
@@ -87,6 +142,7 @@ public class ArServiceCache {
      *
      * @param services Services to update.
      */
+    @ThreadSafe
     public void update(Stream<ServiceDescription> services) {
         services.forEach(service -> {
             if (!this.services.add(service)) {
@@ -94,37 +150,5 @@ public class ArServiceCache {
                 this.services.add(service);
             }
         });
-    }
-
-    private static final class ServiceDescriptionComparator implements Comparator<ServiceDescription> {
-        @Override
-        public int compare(final ServiceDescription a, final ServiceDescription b) {
-            int d;
-            d = a.name().compareTo(b.name());
-            if (d != 0) {
-                return d;
-            }
-            d = a.qualifier().compareTo(b.qualifier());
-            if (d != 0) {
-                return d;
-            }
-            final var aInterfaces = a.supportedInterfaces();
-            final var bInterfaces = b.supportedInterfaces();
-            if (aInterfaces.size() == 1 && bInterfaces.size() == 1) {
-                return aInterfaces.get(0).compareTo(bInterfaces.get(0));
-            }
-            final var aInterfaceArray = aInterfaces.toArray(new InterfaceDescriptor[0]);
-            final var bInterfaceArray = bInterfaces.toArray(new InterfaceDescriptor[0]);
-            Arrays.sort(aInterfaceArray);
-            Arrays.sort(bInterfaceArray);
-            final var i1 = Math.min(aInterfaceArray.length, bInterfaceArray.length);
-            for (var i0 = 0; i0 < i1; ++i0) {
-                d = aInterfaceArray[i0].compareTo(bInterfaceArray[i0]);
-                if (d != 0) {
-                    return d;
-                }
-            }
-            return aInterfaceArray.length - bInterfaceArray.length;
-        }
     }
 }

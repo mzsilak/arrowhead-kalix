@@ -1,8 +1,11 @@
 package se.arkalix.util.concurrent;
 
 import se.arkalix.util.Result;
+import se.arkalix.util.function.ThrowingConsumer;
 import se.arkalix.util.function.ThrowingFunction;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Objects;
 import java.util.function.Consumer;
 
@@ -45,6 +48,41 @@ class FutureFailure<V> implements FutureProgress<V> {
     public FutureProgress<V> addProgressListener(final Listener listener) {
         Objects.requireNonNull(listener, "Expected listener");
         // Does nothing.
+        return this;
+    }
+
+    @Override
+    public Future<V> ifSuccess(final ThrowingConsumer<V> consumer) {
+        Objects.requireNonNull(consumer, "Expected consumer");
+        // Does nothing.
+        return this;
+    }
+
+    @Override
+    public <T extends Throwable> Future<V> ifFailure(final Class<T> class_, final ThrowingConsumer<T> consumer) {
+        Objects.requireNonNull(consumer, "Expected consumer");
+        try {
+            if (class_.isAssignableFrom(fault.getClass())) {
+                consumer.accept(class_.cast(fault));
+            }
+        }
+        catch (final Throwable throwable) {
+            throwable.addSuppressed(fault);
+            return Future.failure(throwable);
+        }
+        return this;
+    }
+
+    @Override
+    public Future<V> always(final ThrowingConsumer<Result<V>> consumer) {
+        Objects.requireNonNull(consumer, "Expected consumer");
+        try {
+            consumer.accept(Result.failure(fault));
+        }
+        catch (final Throwable throwable) {
+            throwable.addSuppressed(fault);
+            return Future.failure(throwable);
+        }
         return this;
     }
 
@@ -216,5 +254,85 @@ class FutureFailure<V> implements FutureProgress<V> {
         Objects.requireNonNull(throwable, "Expected throwable");
         throwable.addSuppressed(fault);
         return Future.failure(throwable);
+    }
+
+    @Override
+    public Future<V> delay(final Duration duration) {
+        Objects.requireNonNull(duration, "Expected duration");
+        return new Future<>() {
+            private Future<?> cancelTarget = null;
+
+            @Override
+            public void onResult(final Consumer<Result<V>> consumer) {
+                cancelTarget = Schedulers.fixed()
+                    .schedule(duration, () -> consumer.accept(Result.failure(fault)));
+            }
+
+            @Override
+            public void cancel(final boolean mayInterruptIfRunning) {
+                if (cancelTarget != null) {
+                    cancelTarget.cancel(mayInterruptIfRunning);
+                    cancelTarget = null;
+                }
+            }
+        };
+    }
+
+    @Override
+    public Future<V> delayUntil(final Instant baseline) {
+        Objects.requireNonNull(baseline, "Expected baseline");
+        return new Future<>() {
+            private Future<?> cancelTarget = null;
+
+            @Override
+            public void onResult(final Consumer<Result<V>> consumer) {
+                final var duration = Duration.between(baseline, Instant.now());
+                final var result = Result.<V>failure(fault);
+                if (duration.isNegative() || duration.isZero()) {
+                    consumer.accept(result);
+                }
+                else {
+                    cancelTarget = Schedulers.fixed()
+                        .schedule(duration, () -> consumer.accept(result));
+                }
+            }
+
+            @Override
+            public void cancel(final boolean mayInterruptIfRunning) {
+                if (cancelTarget != null) {
+                    cancelTarget.cancel(mayInterruptIfRunning);
+                    cancelTarget = null;
+                }
+            }
+        };
+    }
+
+    @Override
+    public Future<?> fork(final Consumer<V> consumer) {
+        Objects.requireNonNull(consumer, "Expected consumer");
+        return Future.failure(fault);
+    }
+
+    @Override
+    public <U> Future<U> forkJoin(final ThrowingFunction<V, U> mapper) {
+        Objects.requireNonNull(mapper, "Expected mapper");
+        return Future.failure(fault);
+    }
+
+    @Override
+    public V await() {
+        throwFault();
+        return null;
+    }
+
+    @Override
+    public V await(final Duration timeout) {
+        throwFault();
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private <E extends Throwable> void throwFault() throws E {
+        throw (E) fault;
     }
 }

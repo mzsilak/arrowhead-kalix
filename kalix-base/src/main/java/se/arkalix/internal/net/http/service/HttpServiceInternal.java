@@ -5,6 +5,7 @@ import se.arkalix.description.ServiceDescription;
 import se.arkalix.descriptor.EncodingDescriptor;
 import se.arkalix.net.http.HttpStatus;
 import se.arkalix.net.http.service.*;
+import se.arkalix.security.access.AccessPolicy;
 import se.arkalix.util.annotation.Internal;
 import se.arkalix.util.concurrent.Future;
 
@@ -12,14 +13,16 @@ import java.util.*;
 
 @Internal
 public class HttpServiceInternal {
+    private final AccessPolicy accessPolicy;
     private final ServiceDescription description;
     private final List<EncodingDescriptor> encodings;
     private final HttpRouteSequence[] routeSequences;
 
     public HttpServiceInternal(final ArSystem system, final HttpService service) {
-        description = service.describeAsProvidedBy(system);
+        accessPolicy = Objects.requireNonNull(service.accessPolicy(), "Expected accessPolicy");
+        description = service.describeAsIfProvidedBy(system);
 
-        final var basePath = description.qualifier();
+        final var basePath = description.uri();
         if (!HttpPaths.isValidPathWithoutPercentEncodings(basePath)) {
             throw new IllegalArgumentException("HttpService basePath \"" +
                 basePath + "\" must start with a forward slash (/) and then " +
@@ -37,7 +40,7 @@ public class HttpServiceInternal {
             throw new IllegalArgumentException("Expected HttpService encodings.size() > 0");
         }
 
-        final var routeSequenceFactory = new HttpRouteSequenceFactory(service.catchers(), service.validators());
+        final var routeSequenceFactory = new HttpRouteSequenceFactory(service.catchers(), service.filters());
         routeSequences = service.routes().stream()
             .sorted(HttpRoutables::compare)
             .map(routeSequenceFactory::createRouteSequenceFor)
@@ -56,7 +59,14 @@ public class HttpServiceInternal {
      * service.
      */
     public String basePath() {
-        return description.qualifier();
+        return description.uri();
+    }
+
+    /**
+     * @return Service access policy.
+     */
+    public AccessPolicy accessPolicy() {
+        return accessPolicy;
     }
 
     /**

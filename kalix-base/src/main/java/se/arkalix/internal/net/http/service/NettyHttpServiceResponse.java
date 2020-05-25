@@ -1,10 +1,15 @@
 package se.arkalix.internal.net.http.service;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.DefaultFileRegion;
+import io.netty.handler.codec.http.*;
 import se.arkalix.descriptor.EncodingDescriptor;
 import se.arkalix.dto.DtoEncoding;
 import se.arkalix.dto.DtoWritable;
 import se.arkalix.dto.DtoWriteException;
-import se.arkalix.dto.DtoWriter;
 import se.arkalix.internal.dto.binary.ByteBufWriter;
 import se.arkalix.internal.net.http.HttpMediaTypes;
 import se.arkalix.net.http.HttpHeaders;
@@ -12,21 +17,18 @@ import se.arkalix.net.http.HttpStatus;
 import se.arkalix.net.http.HttpVersion;
 import se.arkalix.net.http.service.HttpServiceResponse;
 import se.arkalix.util.annotation.Internal;
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.DefaultFileRegion;
-import io.netty.handler.codec.http.*;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
-import static se.arkalix.internal.net.http.NettyHttpAdapters.adapt;
-import static io.netty.handler.codec.http.HttpHeaderNames.*;
+import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_LENGTH;
+import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
+import static se.arkalix.internal.net.http.NettyHttpConverters.convert;
 
 @Internal
 public class NettyHttpServiceResponse implements HttpServiceResponse {
@@ -45,15 +47,20 @@ public class NettyHttpServiceResponse implements HttpServiceResponse {
         final io.netty.handler.codec.http.HttpHeaders headers,
         final EncodingDescriptor encoding)
     {
-        this.encoding = encoding;
-        this.nettyHeaders = headers;
-        this.request = request;
+        this.encoding = Objects.requireNonNull(encoding, "Expected encoding");
+        this.nettyHeaders = Objects.requireNonNull(headers, "Expected headers");
+        this.request = Objects.requireNonNull(request, "Expected request");
     }
 
+    @SuppressWarnings("unchecked")
     public ChannelFuture write(final Channel channel)
         throws DtoWriteException, IOException
     {
-        final var nettyStatus = adapt(status);
+        if (status == null) {
+            throw new IllegalStateException("No HTTP status specified");
+        }
+
+        final var nettyStatus = convert(status);
         final var nettyVersion = request.protocolVersion();
 
         final ByteBuf content;
@@ -63,14 +70,21 @@ public class NettyHttpServiceResponse implements HttpServiceResponse {
         else if (body instanceof byte[]) {
             content = Unpooled.wrappedBuffer((byte[]) body);
         }
-        else if (body instanceof DtoWritable) {
+        else if (body instanceof DtoWritable || body instanceof List) {
             if (dtoEncoding == null) {
-                dtoEncoding = encoding.asDtoEncoding().orElseThrow(() -> new UnsupportedOperationException("" +
+                dtoEncoding = encoding.asDtoEncoding().orElseThrow(() -> new IllegalStateException("" +
                     "There is no DTO support for the \"" + encoding +
                     "\" encoding; response body cannot be encoded"));
             }
             content = channel.alloc().buffer();
-            DtoWriter.write((DtoWritable) body, dtoEncoding, new ByteBufWriter(content));
+            final var buffer = new ByteBufWriter(content);
+            final var writer = dtoEncoding.writer();
+            if (body instanceof DtoWritable) {
+                writer.writeOne((DtoWritable) body, buffer);
+            }
+            else {
+                writer.writeMany((List<DtoWritable>) body, buffer);
+            }
         }
         else if (body instanceof Path) {
             final var file = new RandomAccessFile(((Path) body).toFile(), "r");
@@ -117,10 +131,23 @@ public class NettyHttpServiceResponse implements HttpServiceResponse {
     }
 
     @Override
+    public HttpServiceResponse body(final List<DtoWritable> data) {
+        body = data;
+        return this;
+    }
+
+    @Override
     public HttpServiceResponse body(final DtoEncoding encoding, final DtoWritable data) {
         dtoEncoding = encoding;
         body = data;
-        return null;
+        return this;
+    }
+
+    @Override
+    public HttpServiceResponse body(final DtoEncoding encoding, final List<DtoWritable> data) {
+        dtoEncoding = encoding;
+        body = data;
+        return this;
     }
 
     @Override
@@ -180,7 +207,7 @@ public class NettyHttpServiceResponse implements HttpServiceResponse {
     @Override
     public HttpVersion version() {
         if (version == null) {
-            version = adapt(request.protocolVersion());
+            version = convert(request.protocolVersion());
         }
         return version;
     }

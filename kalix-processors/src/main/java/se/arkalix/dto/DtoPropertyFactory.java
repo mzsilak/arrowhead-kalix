@@ -2,10 +2,12 @@ package se.arkalix.dto;
 
 import se.arkalix.dto.json.JsonName;
 import se.arkalix.dto.types.*;
-import se.arkalix.dto.types.DtoInterface;
 
 import javax.lang.model.element.*;
-import javax.lang.model.type.*;
+import javax.lang.model.type.ArrayType;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 import java.math.BigDecimal;
@@ -17,6 +19,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class DtoPropertyFactory {
+    private final Elements elementUtils;
     private final Types typeUtils;
 
     // Primitive types.
@@ -53,11 +56,14 @@ public class DtoPropertyFactory {
     // Other types.
     private final DeclaredType optionalType;
     private final DeclaredType stringType;
+    private final DeclaredType dtoReadable;
+    private final DeclaredType dtoWritable;
 
     private final Set<Modifier> publicStaticModifiers;
 
     public DtoPropertyFactory(final Elements elementUtils, final Types typeUtils) {
-        this.typeUtils = typeUtils;
+        this.elementUtils = Objects.requireNonNull(elementUtils, "Expected elementUtils");
+        this.typeUtils = Objects.requireNonNull(typeUtils, "Expected typeUtils");
 
         final Function<Class<?>, DeclaredType> getDeclaredType = (class_) ->
             (DeclaredType) elementUtils.getTypeElement(class_.getCanonicalName()).asType();
@@ -91,6 +97,8 @@ public class DtoPropertyFactory {
 
         optionalType = getDeclaredType.apply(Optional.class);
         stringType = getDeclaredType.apply(String.class);
+        dtoReadable = getDeclaredType.apply(DtoReadable.class);
+        dtoWritable = getDeclaredType.apply(DtoWritable.class);
 
         publicStaticModifiers = Stream.of(Modifier.PUBLIC, Modifier.STATIC)
             .collect(Collectors.toSet());
@@ -107,11 +115,11 @@ public class DtoPropertyFactory {
             method.getTypeParameters().size() != 0
         )
         {
-            throw new DtoException(method, "@Readable/@Writable interface " +
-                "methods must either be static, provide a default " +
+            throw new DtoException(method, "@DtoReadableAs/@DtoWritableAs " +
+                "interface methods must either be static, provide a default " +
                 "implementation, or be simple getters, which means that " +
-                "they have a non-void return type, takes no arguments and " +
-                "does not require any type parameters");
+                "they have a non-void return type, take no arguments and " +
+                "do not have any type parameters");
         }
 
         final var builder = new DtoProperty.Builder()
@@ -137,14 +145,15 @@ public class DtoPropertyFactory {
         if (typeUtils.isAssignable(typeUtils.erasure(type), optionalType)) {
             final var declaredType = (DeclaredType) type;
             final var argumentType = declaredType.getTypeArguments().get(0);
+            final var dtoType = resolveDtoType(method, argumentType);
             return builder
-                .type(resolveType(method, argumentType))
+                .type(dtoType)
                 .isOptional(true)
                 .build();
         }
 
         return builder
-            .type(resolveType(method, type))
+            .type(resolveDtoType(method, type))
             .isOptional(false)
             .build();
     }
@@ -158,7 +167,7 @@ public class DtoPropertyFactory {
         return encodingNames;
     }
 
-    private DtoType resolveType(final ExecutableElement method, final TypeMirror type) throws DtoException {
+    private DtoType resolveDtoType(final ExecutableElement method, final TypeMirror type) throws DtoException {
         if (type.getKind().isPrimitive()) {
             return toElementType(type, DtoDescriptor.valueOf(type.getKind()));
         }
@@ -243,7 +252,7 @@ public class DtoPropertyFactory {
         if (isEnumLike(type)) {
             return toElementType(type, DtoDescriptor.ENUM);
         }
-        return toInterfaceType(method, type);
+        return toInterfaceOrCustomType(method, type);
     }
 
     private boolean isEnumLike(final TypeMirror type) {
@@ -252,8 +261,10 @@ public class DtoPropertyFactory {
             return false;
         }
 
-        var hasValueOf = false;
+        var hasEquals = false;
+        var hasHashCode = false;
         var hasToString = false;
+        var hasValueOf = false;
 
         final var typeElement = (TypeElement) element;
         for (final var enclosed : typeElement.getEnclosedElements()) {
@@ -262,6 +273,39 @@ public class DtoPropertyFactory {
             }
             final var executable = (ExecutableElement) enclosed;
             final var name = executable.getSimpleName().toString();
+            if (!hasEquals && Objects.equals(name, "equals")) {
+                final var modifiers = executable.getModifiers();
+                if (modifiers.size() != 1 || !modifiers.contains(Modifier.PUBLIC)) {
+                    continue;
+                }
+                final var parameters = executable.getParameters();
+                if (parameters.size() != 1 || parameters.get(0).getSimpleName().contentEquals("Object")) {
+                    continue;
+                }
+                hasEquals = true;
+            }
+            if (!hasHashCode && Objects.equals(name, "hashCode")) {
+                final var modifiers = executable.getModifiers();
+                if (modifiers.size() != 1 || !modifiers.contains(Modifier.PUBLIC)) {
+                    continue;
+                }
+                final var parameters = executable.getParameters();
+                if (parameters.size() != 0) {
+                    continue;
+                }
+                hasHashCode = true;
+            }
+            if (!hasToString && Objects.equals(name, "toString")) {
+                final var modifiers = executable.getModifiers();
+                if (modifiers.size() != 1 || !modifiers.contains(Modifier.PUBLIC)) {
+                    continue;
+                }
+                final var parameters = executable.getParameters();
+                if (parameters.size() != 0) {
+                    continue;
+                }
+                hasToString = true;
+            }
             if (!hasValueOf && Objects.equals(name, "valueOf")) {
                 if (!executable.getModifiers().containsAll(publicStaticModifiers)) {
                     continue;
@@ -275,48 +319,38 @@ public class DtoPropertyFactory {
                 }
                 hasValueOf = true;
             }
-            if (!hasToString && Objects.equals(name, "toString")) {
-                final var modifiers = executable.getModifiers();
-                if (modifiers.size() != 1 || !modifiers.contains(Modifier.PUBLIC)) {
-                    continue;
-                }
-                final var parameters = executable.getParameters();
-                if (parameters.size() != 0) {
-                    continue;
-                }
-                hasToString = true;
-            }
         }
-        return hasValueOf && hasToString;
+        return hasEquals && hasHashCode && hasToString && hasValueOf;
     }
 
     private DtoSequence toArrayType(final ExecutableElement method, final TypeMirror type) throws DtoException {
         final var arrayType = (ArrayType) type;
-        final var element = resolveType(method, arrayType.getComponentType());
+        final var element = resolveDtoType(method, arrayType.getComponentType());
         return DtoSequence.newArray(arrayType, element);
     }
 
-    private DtoInterface toInterfaceType(final ExecutableElement method, final TypeMirror type) throws DtoException {
+    private DtoType toInterfaceOrCustomType(final ExecutableElement method, final TypeMirror type) throws DtoException {
         final var declaredType = (DeclaredType) type;
-        final var element = declaredType.asElement();
+        var element = typeUtils.asElement(type);
 
-        final var readable = element.getAnnotation(DtoReadableAs.class);
-        final var writable = element.getAnnotation(DtoWritableAs.class);
+        var readable = element.getAnnotation(DtoReadableAs.class);
+        var writable = element.getAnnotation(DtoWritableAs.class);
 
         if (readable == null && writable == null) {
             if (element.getSimpleName().toString().endsWith(DtoTarget.DATA_SUFFIX)) {
                 throw new DtoException(method, "Generated DTO classes may " +
-                    "not be used in interfaces annotated with @Readable or " +
-                    "@Writable; rather use the interface types from which " +
-                    "those DTO classes were generated");
+                    "not be used in interfaces annotated with @DtoReadableAs " +
+                    "or @DtoWritableAs; rather use the interface types from " +
+                    "which those DTO classes were generated");
             }
-            throw new DtoException(method, "Getter return type must be a " +
-                "primitive, a boxed primitive, a String, an array (T[]), " +
-                "a List<T>, a Map<K, V>, an enum, an enum-like class, which " +
-                "overrides toString() and has a public static " +
-                "valueOf(String) method, or be annotated with @Readable " +
-                "and/or @Writable; if an array, list or map, their " +
-                "parameters must conform to the same requirements");
+            if (typeUtils.isAssignable(type, dtoReadable) && typeUtils.isAssignable(type, dtoWritable)) {
+                return new DtoElement(type, DtoDescriptor.CUSTOM);
+            }
+            throw new DtoException(method, "Invalid getter return type; " +
+                "please refer to the `se.arkalix.dto` package documentation " +
+                "for a complete list of supported return types (type: " + type
+                + "/" + element.asType() + ", annotations: " +
+                elementUtils.getAllAnnotationMirrors(element) + ")");
         }
 
         final var readableEncodings = readable != null ? readable.value() : new DtoEncoding[0];
@@ -327,19 +361,19 @@ public class DtoPropertyFactory {
 
     private DtoSequence toListType(final ExecutableElement method, final TypeMirror type) throws DtoException {
         final var declaredType = (DeclaredType) type;
-        final var element = resolveType(method, declaredType.getTypeArguments().get(0));
+        final var element = resolveDtoType(method, declaredType.getTypeArguments().get(0));
         return DtoSequence.newList(declaredType, element);
     }
 
     private DtoMap toMapType(final ExecutableElement method, final TypeMirror type) throws DtoException {
         final var declaredType = (DeclaredType) type;
         final var typeArguments = declaredType.getTypeArguments();
-        final var key = resolveType(method, typeArguments.get(0));
+        final var key = resolveDtoType(method, typeArguments.get(0));
         if (key.descriptor().isCollection() || key.descriptor() == DtoDescriptor.INTERFACE) {
             throw new DtoException(method, "Only boxed primitives, enums, " +
                 "enum-likes and strings may be used as Map keys");
         }
-        final var value = resolveType(method, typeArguments.get(1));
+        final var value = resolveDtoType(method, typeArguments.get(1));
         return new DtoMap(declaredType, key, value);
     }
 

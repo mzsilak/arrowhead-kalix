@@ -5,8 +5,11 @@ import se.arkalix.dto.DtoWritable;
 import se.arkalix.dto.DtoWritableAs;
 
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 
+@SuppressWarnings("UnusedReturnValue")
 public interface HttpBodySender<Self> {
     /**
      * Gets outgoing HTTP body, if any is set.
@@ -32,17 +35,53 @@ public interface HttpBodySender<Self> {
      * <p>
      * The provided writable data transfer object is scheduled for encoding and
      * transmission to the receiver of the body. Please refer to the Javadoc
-     * for the {@code @Writable} annotation for more information about writable
-     * data transfer objects.
+     * for the {@code @DtoWritableAs} annotation for more information about
+     * writable data transfer objects.
      *
      * @param encoding Encoding to use when encoding {@code data}.
      * @param data     Data transfer object to send to receiver of the body.
      * @return This.
      * @throws NullPointerException If {@code encoding} or {@code body} is
      *                              {@code null}.
-     * @see DtoWritableAs @Writable
+     * @see DtoWritableAs @DtoWritableAs
      */
     Self body(final DtoEncoding encoding, final DtoWritable data);
+
+    /**
+     * Sets outgoing HTTP body, replacing any previously set such.
+     * <p>
+     * The provided array of writable data transfer objects are scheduled for
+     * encoding and transmission to the receiver of the body. Please refer to
+     * the Javadoc for the {@code @DtoWritableAs} annotation for more
+     * information about writable data transfer objects.
+     *
+     * @param encoding Encoding to use when encoding {@code data}.
+     * @param data     Data transfer objects to send to receiver of the body.
+     * @return This.
+     * @throws NullPointerException If {@code encoding} or {@code body} is
+     *                              {@code null}.
+     * @see DtoWritableAs @DtoWritableAs
+     */
+    default Self body(final DtoEncoding encoding, final DtoWritable... data) {
+        return body(encoding, Arrays.asList(data));
+    }
+
+    /**
+     * Sets outgoing HTTP body, replacing any previously set such.
+     * <p>
+     * The provided list of writable data transfer objects are scheduled for
+     * encoding and transmission to the receiver of the body. Please refer to
+     * the Javadoc for the {@code @DtoWritableAs} annotation for more
+     * information about writable data transfer objects.
+     *
+     * @param encoding Encoding to use when encoding {@code data}.
+     * @param data     Data transfer objects to send to receiver of the body.
+     * @return This.
+     * @throws NullPointerException If {@code encoding} or {@code body} is
+     *                              {@code null}.
+     * @see DtoWritableAs @DtoWritableAs
+     */
+    Self body(final DtoEncoding encoding, final List<DtoWritable> data);
 
     /**
      * Sets outgoing HTTP body, replacing any previously set such.

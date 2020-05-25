@@ -2,87 +2,42 @@ package se.arkalix.dto;
 
 import se.arkalix.dto.binary.BinaryReader;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.List;
 
 /**
- * Utilities for decoding DTO classes.
+ * An object useful for reading {@link se.arkalix.dto DTO class instances} from
+ * sources representing their contents with a specific encoding.
  */
-public class DtoReader {
-    private static final Map<Class<?>, Method> CLASS_TO_READ_JSON = new ConcurrentHashMap<>();
-
-    private DtoReader() {}
+public interface DtoReader {
+    /**
+     * Reads one encoded value from {@code source}.
+     *
+     * @param class_ Class of value to read.
+     * @param source Source from which the desired value is to be read.
+     * @return Decoded value.
+     * @throws DtoReadException              If reading from {@code source}
+     *                                       fails.
+     * @throws NullPointerException          If {@code class_} or
+     *                                       {@code source} is {@code null}.
+     * @throws UnsupportedOperationException If the DTO interface type of
+     *                                       {@code class_} does not support
+     *                                       the encoding of this reader.
+     */
+    <T extends DtoReadable> T readOne(final Class<T> class_, final BinaryReader source) throws DtoReadException;
 
     /**
-     * Attempts to read a value encoded with {@code encoding} from
-     * {@code source} byte buffer.
+     * Reads a list of encoded values from {@code source}.
      *
-     * @param class_   Class of value to read.
-     * @param encoding Encoding decode read value with.
-     * @param source   Byte buffer from which the desired value is to be read.
-     * @param <T>      Type of desired value.
-     * @throws UnsupportedOperationException If the DTO interface type of
-     *                                       {@code t} does not include the
-     *                                       given {@link DtoEncoding} as
-     *                                       argument to its {@code @Readable}
-     *                                       annotation.
-     * @throws DtoReadException                 If reading from {@code source}
+     * @param class_ Class of values to read.
+     * @param source Source from which the desired values are to be read.
+     * @return Decoded values.
+     * @throws DtoReadException              If reading from {@code source}
      *                                       fails.
+     * @throws NullPointerException          If {@code class_} or
+     *                                       {@code source} is {@code null}.
+     * @throws UnsupportedOperationException If the DTO interface type of
+     *                                       {@code class_} does not support
+     *                                       the encoding of this reader.
      */
-    public static <T extends DtoReadable> T read(
-        final Class<T> class_,
-        final DtoEncoding encoding,
-        final BinaryReader source) throws DtoReadException
-    {
-        if (encoding == DtoEncoding.JSON) {
-            return readJson(class_, encoding, source);
-        }
-        throw new IllegalStateException("DataEncoding that is supported " +
-            "has not yet been added to this method");
-    }
-
-    private static <T> T readJson(
-        final Class<T> class_,
-        final DtoEncoding encoding,
-        final BinaryReader source) throws DtoReadException
-    {
-        final var method = CLASS_TO_READ_JSON.computeIfAbsent(class_, (ignored) -> {
-            try {
-                return class_.getDeclaredMethod("readJson", BinaryReader.class);
-            }
-            catch (final NoSuchMethodException e) {
-                throw encodingNotSupportedBy(encoding, class_);
-            }
-        });
-        try {
-            return class_.cast(method.invoke(null, source));
-        }
-        catch (final IllegalAccessException exception) {
-            throw new RuntimeException(exception);
-        }
-        catch (final InvocationTargetException exception) {
-            final var targetException = exception.getTargetException();
-
-            if (targetException instanceof DtoReadException) {
-                throw (DtoReadException) targetException;
-            }
-            if (targetException instanceof RuntimeException) {
-                throw (RuntimeException) targetException;
-            }
-            if (targetException instanceof Error) {
-                throw (Error) targetException;
-            }
-            throw new RuntimeException(targetException);
-        }
-    }
-
-    private static RuntimeException encodingNotSupportedBy(final DtoEncoding encoding, final Class<?> class_) {
-        return new UnsupportedOperationException("The interface type from " +
-            "which the \"" + class_ + "\" DTO was generated does not " +
-            "include DataEncoding." + encoding + " as argument to its " +
-            "@Readable annotation; no corresponding decoding routine has, " +
-            "consequently, been generated for the class");
-    }
+    <T extends DtoReadable> List<T> readMany(final Class<T> class_, final BinaryReader source) throws DtoReadException;
 }

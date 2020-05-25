@@ -1,62 +1,53 @@
 package se.arkalix.internal.net.http.client;
 
-import se.arkalix.dto.DtoWritable;
-import se.arkalix.dto.DtoWriter;
-import se.arkalix.dto.DtoWriteException;
-import se.arkalix.internal.dto.binary.ByteBufWriter;
-import se.arkalix.internal.net.http.HttpMediaTypes;
-import se.arkalix.internal.util.concurrent.NettyFutures;
-import se.arkalix.net.http.HttpVersion;
-import se.arkalix.net.http.client.HttpClientConnection;
-import se.arkalix.net.http.client.HttpClientRequest;
-import se.arkalix.net.http.client.HttpClientResponse;
-import se.arkalix.util.Result;
-import se.arkalix.util.annotation.Internal;
-import se.arkalix.util.concurrent.Future;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.DefaultFileRegion;
 import io.netty.handler.codec.http.*;
+import se.arkalix.dto.DtoWritable;
+import se.arkalix.dto.DtoWriteException;
+import se.arkalix.internal.dto.binary.ByteBufWriter;
+import se.arkalix.internal.net.http.HttpMediaTypes;
+import se.arkalix.net.http.HttpVersion;
+import se.arkalix.net.http.client.HttpClientConnection;
+import se.arkalix.net.http.client.HttpClientRequest;
+import se.arkalix.net.http.client.HttpClientResponse;
+import se.arkalix.security.NotSecureException;
+import se.arkalix.util.Result;
+import se.arkalix.util.annotation.Internal;
+import se.arkalix.util.concurrent.Future;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.security.cert.X509Certificate;
+import java.security.cert.Certificate;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Objects;
 import java.util.Queue;
-import java.util.concurrent.CancellationException;
 import java.util.function.Consumer;
 
-import static se.arkalix.internal.net.http.NettyHttpAdapters.adapt;
 import static io.netty.handler.codec.http.HttpHeaderNames.*;
+import static se.arkalix.internal.net.http.NettyHttpConverters.convert;
+import static se.arkalix.internal.util.concurrent.NettyFutures.adapt;
 
 @Internal
 public class NettyHttpClientConnection implements HttpClientConnection {
-    private final X509Certificate[] certificateChain;
+    private final Certificate[] certificateChain;
     private final Channel channel;
     private final Queue<FutureResponse> pendingResponseQueue = new LinkedList<>();
 
+    private boolean isClosing = false;
+
     public NettyHttpClientConnection(
         final Channel channel,
-        final X509Certificate[] certificateChain)
+        final Certificate[] certificateChain)
     {
-        this.certificateChain = certificateChain;
-        if (certificateChain != null && certificateChain.length == 0) {
-            throw new IllegalArgumentException("Expected certificateChain.length > 0");
-        }
         this.channel = Objects.requireNonNull(channel, "Expected channel");
-    }
-
-    @Override
-    public X509Certificate[] certificateChain() {
-        if (certificateChain == null) {
-            throw new IllegalStateException("Not in secure mode");
-        }
-        return certificateChain;
+        this.certificateChain = certificateChain;
     }
 
     @Override
@@ -70,18 +61,32 @@ public class NettyHttpClientConnection implements HttpClientConnection {
     }
 
     @Override
+    public Certificate[] certificateChain() {
+        if (certificateChain == null) {
+            throw new NotSecureException("Connection not secured; " +
+                "no certificates are available");
+        }
+        return certificateChain;
+    }
+
+    public boolean isClosing() {
+        return isClosing && pendingResponseQueue.size() == 0;
+    }
+
+    @Override
     public boolean isLive() {
         return channel.isActive();
     }
 
     @Override
-    public Future<HttpClientResponse> send(final HttpClientRequest request) {
-        return send(request, true);
+    public boolean isSecure() {
+        return certificateChain != null;
     }
 
-    private Future<HttpClientResponse> send(final HttpClientRequest request, final boolean keepAlive) {
+    @Override
+    public Future<HttpClientResponse> send(final HttpClientRequest request) {
         try {
-            writeRequestToChannel(request, keepAlive);
+            writeRequestToChannel(request);
         }
         catch (final Throwable throwable) {
             return Future.failure(throwable);
@@ -93,19 +98,15 @@ public class NettyHttpClientConnection implements HttpClientConnection {
 
     @Override
     public Future<HttpClientResponse> sendAndClose(final HttpClientRequest request) {
-        return send(request, false)
-            .flatMapResult(result -> {
-                if (channel.isActive()) {
-                    return close().mapResult(ignored -> result);
-                }
-                return Future.of(result);
-            });
+        isClosing = true;
+        return send(request);
     }
 
-    private void writeRequestToChannel(final HttpClientRequest request, final boolean keepAlive) throws DtoWriteException, IOException {
+    @SuppressWarnings("unchecked")
+    private void writeRequestToChannel(final HttpClientRequest request) throws DtoWriteException, IOException {
         final var body = request.body().orElse(null);
         final var headers = request.headers().unwrap();
-        final var method = adapt(request.method().orElseThrow(() -> new IllegalArgumentException("Expected method")));
+        final var method = convert(request.method().orElseThrow(() -> new IllegalArgumentException("Expected method")));
 
         final var queryStringEncoder = new QueryStringEncoder(request.uri()
             .orElseThrow(() -> new IllegalArgumentException("Expected uri")));
@@ -118,10 +119,11 @@ public class NettyHttpClientConnection implements HttpClientConnection {
         }
 
         final var uri = queryStringEncoder.toString();
-        final var version = adapt(request.version().orElse(HttpVersion.HTTP_11));
+        final var version = convert(request.version().orElse(HttpVersion.HTTP_11));
 
-        headers.set(HOST, remoteSocketAddress().getHostString());
-        HttpUtil.setKeepAlive(headers, version, keepAlive);
+        final var remoteSocketAddress = remoteSocketAddress();
+        headers.set(HOST, remoteSocketAddress.getHostString() + ":" + remoteSocketAddress.getPort());
+        HttpUtil.setKeepAlive(headers, version, !isClosing);
 
         final ByteBuf content;
         if (body == null) {
@@ -130,13 +132,20 @@ public class NettyHttpClientConnection implements HttpClientConnection {
         else if (body instanceof byte[]) {
             content = Unpooled.wrappedBuffer((byte[]) body);
         }
-        else if (body instanceof DtoWritable) {
+        else if (body instanceof DtoWritable || body instanceof List) {
             final var contentType = headers.get(CONTENT_TYPE);
             final var encoding = request.encoding().orElseThrow(() -> new IllegalStateException("" +
                 "DTO body set without encoding being specified"));
 
             content = channel.alloc().buffer();
-            DtoWriter.write((DtoWritable) body, encoding, new ByteBufWriter(content));
+            final var buffer = new ByteBufWriter(content);
+            final var writer = encoding.writer();
+            if (body instanceof DtoWritable) {
+                writer.writeOne((DtoWritable) body, buffer);
+            }
+            else {
+                writer.writeMany((List<DtoWritable>) body, buffer);
+            }
 
             final var mediaType = HttpMediaTypes.toMediaType(encoding);
             if (!headers.contains(ACCEPT)) {
@@ -173,7 +182,7 @@ public class NettyHttpClientConnection implements HttpClientConnection {
 
     @Override
     public Future<?> close() {
-        return NettyFutures.adapt(channel.close());
+        return adapt(channel.close());
     }
 
     public boolean onResponseResult(final Result<HttpClientResponse> result) {
@@ -207,14 +216,11 @@ public class NettyHttpClientConnection implements HttpClientConnection {
 
         /*
          * Cancelling simply causes the response to be ignored. If not wanting
-         * the response to be received at all the client must be closed.
+         * the response to be received at all the connection must be closed.
          */
         @Override
         public void cancel(final boolean mayInterruptIfRunning) {
-            if (isDone) {
-                return;
-            }
-            setResult(Result.failure(new CancellationException()));
+            isDone = true;
         }
 
         public boolean setResult(final Result<HttpClientResponse> result) {

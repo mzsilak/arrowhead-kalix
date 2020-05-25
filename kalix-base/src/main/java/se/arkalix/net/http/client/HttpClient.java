@@ -1,21 +1,23 @@
 package se.arkalix.net.http.client;
 
-import se.arkalix.ArSystem;
-import se.arkalix.internal.net.NettyBootstraps;
-import se.arkalix.internal.net.http.client.FutureHttpClientConnection;
-import se.arkalix.internal.net.http.client.NettyHttpClientConnectionInitializer;
-import se.arkalix.security.identity.ArSystemKeyStore;
-import se.arkalix.security.identity.ArTrustStore;
-import se.arkalix.util.concurrent.Future;
-import se.arkalix.util.concurrent.FutureScheduler;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.handler.ssl.ClientAuth;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+import se.arkalix.ArSystem;
+import se.arkalix.internal.net.http.client.FutureHttpClientConnection;
+import se.arkalix.internal.net.http.client.NettyHttpClientConnectionInitializer;
+import se.arkalix.internal.util.concurrent.NettyScheduler;
+import se.arkalix.security.NotSecureException;
+import se.arkalix.security.identity.OwnedIdentity;
+import se.arkalix.security.identity.SystemIdentity;
+import se.arkalix.security.identity.TrustStore;
+import se.arkalix.util.annotation.ThreadSafe;
+import se.arkalix.util.concurrent.Future;
+import se.arkalix.util.concurrent.Schedulers;
 
 import javax.net.ssl.SSLException;
 import java.net.InetSocketAddress;
-import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 import java.util.WeakHashMap;
@@ -23,36 +25,43 @@ import java.util.WeakHashMap;
 import static se.arkalix.internal.util.concurrent.NettyFutures.adapt;
 
 /**
- * Allows for the creation of TCP connections through which HTTP messages can
- * be sent.
+ * Client useful for sending HTTP messages via TCP connections to arbitrary
+ * remote hosts.
  */
 public class HttpClient {
-    private static final Map<ArSystem, HttpClient> cache = Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<ArSystem, HttpClient> cache = new WeakHashMap<>();
+
+    private static HttpClient http = null;
+    private static HttpClient https = null;
 
     private final Bootstrap bootstrap;
     private final InetSocketAddress localSocketAddress;
     private final SslContext sslContext;
+    private final SystemIdentity identity;
 
     private HttpClient(final Builder builder) throws SSLException {
-        bootstrap = NettyBootstraps.createBootstrapUsing(builder.scheduler != null
-            ? builder.scheduler
-            : FutureScheduler.getDefault());
+        final var scheduler = (NettyScheduler) Schedulers.fixed();
+        bootstrap = new Bootstrap()
+            .group(scheduler.eventLoopGroup())
+            .channel(scheduler.socketChannelClass());
         localSocketAddress = builder.localSocketAddress;
 
         if (builder.isInsecure) {
             sslContext = null;
+            identity = null;
         }
         else {
             final var sslContextBuilder = SslContextBuilder.forClient()
                 .trustManager(builder.trustStore != null ? builder.trustStore.certificates() : null)
                 .startTls(false);
 
-            if (builder.keyStore != null) {
+            if (builder.identity != null) {
                 sslContextBuilder
-                    .keyManager(builder.keyStore.privateKey(), builder.keyStore.systemChain())
+                    .keyManager(builder.identity.privateKey(), builder.identity.chain())
                     .clientAuth(ClientAuth.REQUIRE);
             }
             sslContext = sslContextBuilder.build();
+            identity = builder.identity;
         }
     }
 
@@ -60,16 +69,26 @@ public class HttpClient {
      * Creates new or gets a cached {@code HttpClient} that takes its
      * configuration details from the given Arrowhead {@code system}.
      * <p>
-     * The return HTTP client will use the same key store, trust store,
-     * security mode, local network interface and scheduler as the given
-     * system.
+     * The returned HTTP client will use the same owned identity, trust store,
+     * security mode and local network interface as the given system, which
+     * makes it suitable for communicating with other systems within the same
+     * local cloud. However, for most intents and purposes it is preferable to
+     * use the {@link se.arkalix.net.http.consumer.HttpConsumer HttpConsumer}
+     * class for consuming system services, as it takes care of keeping track
+     * of IP addresses, authorization tokens and other relevant details. Such
+     * an instance can with advantage be constructed from the successful result
+     * of the {@link ArSystem#consume()} method.
+     * <p>
+     * If wanting to communicate with other Arrowhead systems without
+     * creating an {@link ArSystem} instance, use the {@link Builder} instead.
      *
      * @param system Arrowhead system from which to extract configuration.
      * @return Created or cached client.
      * @throws SSLException If creating SSL/TLS context from given Arrowhead
      *                      system fails.
      */
-    public static HttpClient from(final ArSystem system) throws SSLException {
+    @ThreadSafe
+    public synchronized static HttpClient from(final ArSystem system) throws SSLException {
         var client = cache.get(system);
         if (client != null) {
             return client;
@@ -78,7 +97,7 @@ public class HttpClient {
         final var builder = new Builder();
         if (system.isSecure()) {
             builder
-                .keyStore(system.keyStore())
+                .identity(system.identity())
                 .trustStore(system.trustStore());
         }
         else {
@@ -87,11 +106,91 @@ public class HttpClient {
 
         client = builder
             .localSocketAddress(new InetSocketAddress(system.localAddress(), 0))
-            .scheduler(system.scheduler())
             .build();
 
         cache.put(system, client);
         return client;
+    }
+
+    /**
+     * Creates new or gets a cached {@code HttpClient} with a default
+     * configuration making it suitable for communicating with regular HTTP
+     * servers without encryption.
+     * <p>
+     * The returned client is intended primarily for communicating with legacy
+     * systems that are known to be trusted and where encryption is infeasible
+     * to add. Its use is not advised for most kinds of production scenarios.
+     * If wanting to communicate with other Arrowhead systems, please prefer
+     * use of the {@link #from(ArSystem)} method for creating HTTP clients.
+     *
+     * @return New or cached HTTP client.
+     */
+    @ThreadSafe
+    public synchronized static HttpClient http() {
+        if (http == null) {
+            try {
+                http = new Builder()
+                    .insecure()
+                    .build();
+            }
+            catch (final SSLException exception) {
+                throw new RuntimeException(exception);
+            }
+        }
+        return http;
+    }
+
+    /**
+     * Creates new or gets a cached {@code HttpClient} with a default
+     * configuration making it suitable for communicating with regular HTTPS
+     * servers.
+     * <p>
+     * The client will rely on the default trust manager that comes with the
+     * system Java installation, if any, which tends to be useful for
+     * interacting with just about any Internet HTTPS server.
+     * <p>
+     * The returned client is intended primarily for communicating with legacy
+     * systems and/or traditional HTTPS servers. If wanting to communicate with
+     * other Arrowhead systems, please prefer use of the
+     * {@link #from(ArSystem)} method for creating HTTP clients.
+     *
+     * @return New or cached HTTPS client.
+     */
+    @ThreadSafe
+    public synchronized static HttpClient https() throws SSLException {
+        if (https == null) {
+            https = new Builder().build();
+        }
+        return https;
+    }
+
+    /**
+     * @return {@link se.arkalix.security.identity Identity} of the system
+     * owning this client.
+     * @throws NotSecureException If this client was not provided a system
+     *                            identity when created.
+     */
+    public SystemIdentity identity() {
+        if (identity == null) {
+            throw new NotSecureException("Anonymous HTTP client; no system " +
+                "identity is available");
+        }
+        return identity;
+    }
+
+    /**
+     * @return {@code true} only if this client has a {@link SystemIdentity},
+     * accessible via the {@link #identity()} method.
+     */
+    public boolean isIdentifiable() {
+        return identity != null;
+    }
+
+    /**
+     * @return {@code true} only if this client is configured to use HTTPS.
+     */
+    public boolean isSecure() {
+        return sslContext != null;
     }
 
     /**
@@ -158,12 +257,12 @@ public class HttpClient {
     /**
      * Builder useful for creating {@link HttpClient} instances.
      */
+    @SuppressWarnings("UnusedReturnValue")
     public static class Builder {
         private InetSocketAddress localSocketAddress;
-        private ArSystemKeyStore keyStore;
-        private ArTrustStore trustStore;
+        private OwnedIdentity identity;
+        private TrustStore trustStore;
         private boolean isInsecure = false;
-        private FutureScheduler scheduler;
 
         /**
          * Ensures that the identified local network interface is used by
@@ -179,19 +278,21 @@ public class HttpClient {
         }
 
         /**
-         * Sets key store to use for representing created HTTP clients.
+         * Sets owned identity to use for representing created HTTP clients.
          * <p>
-         * If insecure mode is not enabled and no key store is provided, client
-         * authentication is disabled for created HTTP clients, making them
-         * unsuitable for communicating with Arrowhead systems. The clients
-         * may, however, be used for communicating with arbitrary HTTP servers
-         * that do not require client authentication.
+         * If {@link #insecure() insecure mode} is <i>not</i> enabled and no
+         * identity is provided, client authentication is disabled for created
+         * HTTP clients, making them unsuitable for communicating with
+         * Arrowhead systems. The clients may, however, be used for
+         * communicating with arbitrary HTTP servers that do not require client
+         * authentication.
          *
-         * @param keyStore Key store to use.
+         * @param identity Owned identity to use.
          * @return This builder.
+         * @see se.arkalix.security Arrowhead Security
          */
-        public final Builder keyStore(final ArSystemKeyStore keyStore) {
-            this.keyStore = keyStore;
+        public final Builder identity(final OwnedIdentity identity) {
+            this.identity = identity;
             return this;
         }
 
@@ -199,13 +300,16 @@ public class HttpClient {
          * Sets trust store to use for determining what systems are trusted to
          * be communicated with by created HTTP clients.
          * <p>
-         * If insecure mode is not enabled and no trust store is provided, the
-         * default system trust store is used instead.
+         * If {@link #insecure() insecure mode} is <i>not</i> enabled and no
+         * trust store is provided, the default system trust store is used
+         * instead. This is typically suitable if wanting to communicate with
+         * regular HTTP servers over HTTPS.
          *
          * @param trustStore Trust store to use.
          * @return This builder.
+         * @see se.arkalix.security Arrowhead Security
          */
-        public final Builder trustStore(final ArTrustStore trustStore) {
+        public final Builder trustStore(final TrustStore trustStore) {
             this.trustStore = trustStore;
             return this;
         }
@@ -213,34 +317,15 @@ public class HttpClient {
         /**
          * Explicitly enables insecure mode for this client.
          * <p>
-         * In insecure mode, no cryptography is used to establish identities or
-         * connections between systems. Usage of this mode is not advised for
-         * most kinds of production scenarios.
+         * In {@link se.arkalix.security insecure mode}, no cryptography is
+         * used to establish identities or connections between systems. Usage
+         * of this mode is not advised for most kinds of production scenarios.
          *
          * @return This builder.
+         * @see se.arkalix.security Arrowhead Security
          */
         public final Builder insecure() {
             this.isInsecure = true;
-            return this;
-        }
-
-        /**
-         * Sets scheduler to be used by created HTTP clients.
-         * <p>
-         * If a non-null scheduler is explicitly provided via this method, it
-         * becomes the responsibility of the caller to ensure that the
-         * scheduler is shut down when no longer in use.
-         * <p>
-         * If no scheduler is explicitly specified, the one returned by
-         * {@link FutureScheduler#getDefault()} is used instead. This means
-         * that if several factories are created without schedulers being
-         * explicitly set, the factories will all share the same schedulers.
-         *
-         * @param scheduler Asynchronous task scheduler.
-         * @return This builder.
-         */
-        public final Builder scheduler(final FutureScheduler scheduler) {
-            this.scheduler = scheduler;
             return this;
         }
 

@@ -20,6 +20,7 @@ import java.util.*;
  * @see <a href="https://tools.ietf.org/html/rfc7540#section-8.1.2">RFC 7540, Section 8.1.2</a>
  * @see <a href="https://www.iana.org/assignments/message-headers/message-headers.xhtml">IANA Message Headers</a>
  */
+@SuppressWarnings({"unused", "UnusedReturnValue"})
 public class HttpHeaders {
     private final io.netty.handler.codec.http.HttpHeaders headers;
 
@@ -31,10 +32,8 @@ public class HttpHeaders {
     }
 
     /**
-     * This is an <i>internal</i> API. It may change in breaking ways between
-     * patch versions of the Kalix library. Use of it is not advised.
-     *
-     * @param headers Netty headers.
+     * <i>Internal API</i>. Might change in breaking ways between patch
+     * versions of the Kalix library. Use is not advised.
      */
     @Internal
     public HttpHeaders(final io.netty.handler.codec.http.HttpHeaders headers) {
@@ -147,7 +146,7 @@ public class HttpHeaders {
     }
 
     /**
-     * Removes any existing headers with the given name, and then adds headers,
+     * Removes any existing headers with the given name and then adds headers,
      * all with the given name, to this collection.
      * <p>
      * The method may be though of as performing the equivalent of the
@@ -170,7 +169,7 @@ public class HttpHeaders {
     }
 
     /**
-     * Removes any existing headers with the given name, and then adds headers,
+     * Removes any existing headers with the given name and then adds headers,
      * all with the given name, to this collection.
      * <p>
      * The method may be though of as performing the equivalent of the
@@ -189,6 +188,72 @@ public class HttpHeaders {
      */
     public HttpHeaders set(final CharSequence name, final String... values) {
         return set(name, Arrays.asList(values));
+    }
+
+    /**
+     * Sets header only if no such exists with the same name.
+     *
+     * @param name  Name of header. Not case sensitive. Prefer lowercase.
+     * @param value New header value.
+     * @return This collection.
+     */
+    public HttpHeaders setIfEmpty(final CharSequence name, final CharSequence value) {
+        if (!headers.contains(name)) {
+            headers.set(name, value);
+        }
+        return this;
+    }
+
+    /**
+     * Sets headers, all with the given name only if no such exists with the
+     * same name.
+     * <p>
+     * The method may be though of as performing the equivalent of the
+     * following code:
+     * <pre>
+     *     if (headers.get(name).isEmpty()) {
+     *         for (final var value : values) {
+     *             headers.add(name, value);
+     *         }
+     *     }
+     * </pre>
+     *
+     * @param name   Name of header. Not case sensitive. Prefer lowercase.
+     * @param values New values to associate with header name.
+     * @return This collection.
+     * @see #add(CharSequence, CharSequence)
+     */
+    public HttpHeaders setIfEmpty(final CharSequence name, final Iterable<String> values) {
+        if (!headers.contains(name)) {
+            headers.set(name, values);
+        }
+        return this;
+    }
+
+    /**
+     * Sets headers, all with the given name only if no such exists with the
+     * same name.
+     * <p>
+     * The method may be though of as performing the equivalent of the
+     * following code:
+     * <pre>
+     *     if (headers.get(name).isEmpty()) {
+     *         for (final var value : values) {
+     *             headers.add(name, value);
+     *         }
+     *     }
+     * </pre>
+     *
+     * @param name   Name of header. Not case sensitive. Prefer lowercase.
+     * @param values New values to associate with header name.
+     * @return This collection.
+     * @see #add(CharSequence, CharSequence)
+     */
+    public HttpHeaders setIfEmpty(final CharSequence name, final String... values) {
+        if (!headers.contains(name)) {
+            headers.set(name, Arrays.asList(values));
+        }
+        return this;
     }
 
     /**
@@ -213,10 +278,8 @@ public class HttpHeaders {
     }
 
     /**
-     * This is an <i>internal</i> API. It may change in breaking ways between
-     * patch versions of the Kalix library. Use of it is not advised.
-     *
-     * @return Netty headers.
+     * <i>Internal API</i>. Might change in breaking ways between patch
+     * versions of the Kalix library. Use is not advised.
      */
     @Internal
     public io.netty.handler.codec.http.HttpHeaders unwrap() {

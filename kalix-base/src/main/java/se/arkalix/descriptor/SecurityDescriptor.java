@@ -1,11 +1,16 @@
 package se.arkalix.descriptor;
 
+import se.arkalix.security.access.AccessByCloudCertificate;
+import se.arkalix.security.access.AccessByCloudWhitelist;
+import se.arkalix.security.identity.SystemIdentity;
+
 import java.util.Objects;
 
 /**
- * Names an access policy that Arrowhead services can use when exposing their
- * services.
+ * Names an {@link se.arkalix.security.access.AccessPolicy access policy} that
+ * Arrowhead services can be configured to use.
  */
+@SuppressWarnings("unused")
 public final class SecurityDescriptor {
     private final String name;
 
@@ -14,40 +19,54 @@ public final class SecurityDescriptor {
     }
 
     /**
-     * Either acquires a cached access descriptor matching the given name, or
+     * Either acquires a cached security descriptor matching the given name, or
      * creates a new descriptor.
      *
-     * @param name Desired access descriptor name.
-     * @return New or existing access descriptor.
+     * @param name Desired security descriptor name.
+     * @return New or existing security descriptor.
      */
-    public SecurityDescriptor getOrCreate(final String name) {
+    public static SecurityDescriptor getOrCreate(final String name) {
         return valueOf(name);
     }
 
     /**
-     * Unrestricted access.
-     * <p>
-     * No certificates or other credentials are exchanged while systems
-     * interact under this policy. The policy is <i>only</i> allowed for
-     * services being provided by systems running in insecure mode.
+     * @return {@code true} only if this descriptor is not {@link #NOT_SECURE}.
      */
-    public static final SecurityDescriptor NOT_SECURE = new SecurityDescriptor("NOT_SECURE");
+    public boolean isSecure() {
+        return this != NOT_SECURE;
+    }
 
     /**
-     * Certificate-only policy.
+     * Certificate {@link AccessByCloudCertificate
+     * access policy}, with or without {@link
+     * AccessByCloudWhitelist white-listing}.
      * <p>
      * A consuming system is trusted only if it can (1) present a certificate
-     * from a trusted issuer, as well as (2) the common name of that
-     * certificate is white-listed by the service.
+     * issued by the same cloud certificate as a provider, as well as (2) the
+     * {@link se.arkalix.security.identity system name} of that certificate is
+     * white-listed, if required, by the service.
      */
     public static final SecurityDescriptor CERTIFICATE = new SecurityDescriptor("CERTIFICATE");
 
     /**
-     * Certificate and token policy.
+     * Unrestricted {@link se.arkalix.security.access.AccessUnrestricted access
+     * policy}.
+     * <p>
+     * No certificates or other credentials are exchanged while systems
+     * interact under this policy. The policy is <i>only</i> allowed for
+     * services being provided by systems running in {@link se.arkalix.security
+     * insecure mode}.
+     */
+    public static final SecurityDescriptor NOT_SECURE = new SecurityDescriptor("NOT_SECURE");
+
+    /**
+     * Token access policy.
      * <p>
      * A consuming system is trusted only if it can (1) present a certificate
-     * from a trusted issuer, as well as (2) present a token originating from a
-     * designated authorization system.
+     * issued by the same
+     * {@link SystemIdentity master}
+     * certificate as a provider, as well as (2) present a token originating
+     * from a designated authorization system.
      */
     public static final SecurityDescriptor TOKEN = new SecurityDescriptor("TOKEN");
 
@@ -60,8 +79,8 @@ public final class SecurityDescriptor {
     public static SecurityDescriptor valueOf(String name) {
         name = Objects.requireNonNull(name, "Expected name").toUpperCase();
         switch (name) {
-        case "NOT_SECURE": return NOT_SECURE;
         case "CERTIFICATE": return CERTIFICATE;
+        case "NOT_SECURE": return NOT_SECURE;
         case "TOKEN": return TOKEN;
         }
         return new SecurityDescriptor(name);

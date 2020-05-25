@@ -11,6 +11,7 @@ import java.util.Optional;
 /**
  * An incoming  HTTP response.
  */
+@SuppressWarnings("unused")
 public interface HttpClientResponse extends HttpBodyReceiver {
     /**
      * Retrieves the body of this response, if its status code is in the range
@@ -20,8 +21,8 @@ public interface HttpClientResponse extends HttpBodyReceiver {
      * @param class_   Class to decode incoming HTTP body into.
      * @param <R>      Type of {@code class_}.
      * @return Future completed immediately with an exception if the status
-     * code is outside the success range, or when the incoming HTTP body has been
-     * fully received and decoded into an instance of {@code class_}.
+     * code is outside the success range, or when the incoming HTTP body has
+     * been fully received and decoded into an instance of {@code class_}.
      * @throws IllegalStateException If the body has already been requested.
      */
     default <R extends DtoReadable> Future<R> bodyAsClassIfSuccess(

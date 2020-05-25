@@ -9,35 +9,20 @@ import java.util.regex.Pattern;
 
 /**
  * Names a network interface protocol triplet.
- *
- * Such a triplet names a transport protocol, indicates whether or not TLS is
- * required, as well as naming a message payload encoding.
+ * <p>
+ * Each provided Arrowhead {@link se.arkalix.ArService service} exposes its
+ * functionality via at least one <i>interface</i>. An interface consists of a
+ * {@link TransportDescriptor transport protocol}, a requirement to either use
+ * or not to use <a href="https://tools.ietf.org/html/rfc7925">TLS/DTLS</a>, as
+ * well as a {@link EncodingDescriptor payload encoding}. When it is advertised
+ * what interfaces a certain service support, each of those interfaces will be
+ * represented by an instance of this descriptor.
  */
+@SuppressWarnings("unused")
 public final class InterfaceDescriptor implements Comparable<InterfaceDescriptor> {
     private static final Pattern TRIPLET_PATTERN = Pattern.compile("^([0-9A-Z_]+)-(IN)?SECURE-([0-9A-Z_]+)$");
 
     private static final HashMap<TransportDescriptor, List<InterfaceDescriptor>> CACHE;
-
-    static {
-        CACHE = new HashMap<>();
-        try {
-            for (final var field : InterfaceDescriptor.class.getFields()) {
-                if (Modifier.isStatic(field.getModifiers()) && field.getType() == TransportDescriptor.class) {
-                    final var descriptor = (InterfaceDescriptor) field.get(null);
-                    CACHE.compute(descriptor.transport, (key, value) -> {
-                        if (value == null) {
-                            value = new ArrayList<>();
-                        }
-                        value.add(descriptor);
-                        return value;
-                    });
-                }
-            }
-        }
-        catch (final Exception exception) {
-            throw new RuntimeException("Interface cache initialization failed", exception);
-        }
-    }
 
     private final TransportDescriptor transport;
     private final boolean isSecure;
@@ -364,5 +349,26 @@ public final class InterfaceDescriptor implements Comparable<InterfaceDescriptor
     @Override
     public int compareTo(final InterfaceDescriptor other) {
         return text.compareTo(other.text);
+    }
+
+    static {
+        CACHE = new HashMap<>();
+        try {
+            for (final var field : InterfaceDescriptor.class.getFields()) {
+                if (Modifier.isStatic(field.getModifiers()) && field.getType() == TransportDescriptor.class) {
+                    final var descriptor = (InterfaceDescriptor) field.get(null);
+                    CACHE.compute(descriptor.transport, (key, value) -> {
+                        if (value == null) {
+                            value = new ArrayList<>();
+                        }
+                        value.add(descriptor);
+                        return value;
+                    });
+                }
+            }
+        }
+        catch (final Exception exception) {
+            throw new RuntimeException("Interface cache initialization failed", exception);
+        }
     }
 }

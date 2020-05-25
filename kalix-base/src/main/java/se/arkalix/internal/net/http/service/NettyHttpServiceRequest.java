@@ -1,44 +1,41 @@
 package se.arkalix.internal.net.http.service;
 
+import io.netty.handler.codec.http.HttpRequest;
+import io.netty.handler.codec.http.QueryStringDecoder;
+import se.arkalix.description.ConsumerDescription;
 import se.arkalix.dto.DtoEncoding;
 import se.arkalix.dto.DtoReadable;
 import se.arkalix.internal.net.http.NettyHttpBodyReceiver;
-import se.arkalix.internal.net.http.NettyHttpPeer;
+import se.arkalix.internal.net.http.NettyHttpConverters;
 import se.arkalix.net.http.HttpHeaders;
 import se.arkalix.net.http.HttpMethod;
-import se.arkalix.net.http.HttpPeer;
 import se.arkalix.net.http.HttpVersion;
 import se.arkalix.net.http.service.HttpServiceRequest;
+import se.arkalix.security.NotSecureException;
 import se.arkalix.util.annotation.Internal;
 import se.arkalix.util.concurrent.FutureProgress;
-import io.netty.handler.codec.http.HttpRequest;
-import io.netty.handler.codec.http.QueryStringDecoder;
 
 import java.io.InputStream;
 import java.nio.file.Path;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-
-import static se.arkalix.internal.net.http.NettyHttpAdapters.adapt;
+import java.util.*;
 
 @Internal
 public class NettyHttpServiceRequest implements HttpServiceRequest {
     private final NettyHttpBodyReceiver body;
     private final QueryStringDecoder queryStringDecoder;
     private final HttpRequest request;
-    private final NettyHttpPeer requester;
+    private final ConsumerDescription consumer;
 
     private HttpHeaders headers = null;
     private HttpMethod method = null;
+    private Map<String, List<String>> queryParameters = null;
     private HttpVersion version = null;
 
     private NettyHttpServiceRequest(final Builder builder) {
         body = Objects.requireNonNull(builder.body, "Expected body");
         queryStringDecoder = Objects.requireNonNull(builder.queryStringDecoder, "Expected queryStringDecoder");
         request = Objects.requireNonNull(builder.request, "Expected request");
-        requester = Objects.requireNonNull(builder.requester, "Expected requester");
+        consumer = builder.consumer;
     }
 
     @Override
@@ -54,6 +51,19 @@ public class NettyHttpServiceRequest implements HttpServiceRequest {
     @Override
     public FutureProgress<byte[]> bodyAsByteArray() {
         return body.bodyAsByteArray();
+    }
+
+    @Override
+    public <R extends DtoReadable> FutureProgress<List<R>> bodyAsList(final Class<R> class_) {
+        return body.bodyAsList(class_);
+    }
+
+    @Override
+    public <R extends DtoReadable> FutureProgress<List<R>> bodyAsList(
+        final DtoEncoding encoding,
+        final Class<R> class_)
+    {
+        return body.bodyAsList(encoding, class_);
     }
 
     @Override
@@ -82,7 +92,7 @@ public class NettyHttpServiceRequest implements HttpServiceRequest {
     @Override
     public HttpMethod method() {
         if (method == null) {
-            method = adapt(request.method());
+            method = NettyHttpConverters.convert(request.method());
         }
         return method;
     }
@@ -99,18 +109,25 @@ public class NettyHttpServiceRequest implements HttpServiceRequest {
 
     @Override
     public Map<String, List<String>> queryParameters() {
-        return Collections.unmodifiableMap(queryStringDecoder.parameters());
+        if (queryParameters == null) {
+            queryParameters = Collections.unmodifiableMap(queryStringDecoder.parameters());
+        }
+        return queryParameters;
     }
 
     @Override
-    public HttpPeer requester() {
-        return requester;
+    public ConsumerDescription consumer() {
+        if (consumer == null) {
+            throw new NotSecureException("Not in secure mode; consumer " +
+                "information unavailable");
+        }
+        return consumer;
     }
 
     @Override
     public HttpVersion version() {
         if (version == null) {
-            version = adapt(request.protocolVersion());
+            version = NettyHttpConverters.convert(request.protocolVersion());
         }
         return version;
     }
@@ -118,7 +135,7 @@ public class NettyHttpServiceRequest implements HttpServiceRequest {
     public static class Builder {
         private NettyHttpBodyReceiver body;
         private HttpRequest request;
-        private NettyHttpPeer requester;
+        private ConsumerDescription consumer;
         private QueryStringDecoder queryStringDecoder;
 
         public Builder body(final NettyHttpBodyReceiver body) {
@@ -136,8 +153,8 @@ public class NettyHttpServiceRequest implements HttpServiceRequest {
             return this;
         }
 
-        public Builder requester(final NettyHttpPeer requester) {
-            this.requester = requester;
+        public Builder consumer(final ConsumerDescription consumer) {
+            this.consumer = consumer;
             return this;
         }
 

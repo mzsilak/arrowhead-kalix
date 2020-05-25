@@ -1,15 +1,16 @@
 package se.arkalix.net.http.client;
 
-import se.arkalix.net.http.HttpPeer;
+import se.arkalix.security.NotSecureException;
 import se.arkalix.util.concurrent.Future;
 
 import java.net.InetSocketAddress;
+import java.security.cert.Certificate;
 
 /**
- * Connection useful for sending HTTP requests to a single remote socket
- * address.
+ * Connection, established via a {@link HttpClient}, useful for sending HTTP
+ * requests to a single remote socket address.
  */
-public interface HttpClientConnection extends HttpPeer {
+public interface HttpClientConnection {
     /**
      * @return Address of host reachable via this connection.
      */
@@ -21,10 +22,22 @@ public interface HttpClientConnection extends HttpPeer {
     InetSocketAddress localSocketAddress();
 
     /**
+     * @return Certificate chain associated with host reachable via this
+     * connection.
+     * @throws NotSecureException If the connection is not secure.
+     */
+    Certificate[] certificateChain();
+
+    /**
      * @return {@code true} only if this connection can be used to send
      * requests to its remote peer.
      */
     boolean isLive();
+
+    /**
+     * @return {@code true} only if this is an HTTPS connection.
+     */
+    boolean isSecure();
 
     /**
      * Sends given {@code request} to HTTP service represented by this
@@ -47,8 +60,7 @@ public interface HttpClientConnection extends HttpPeer {
     Future<HttpClientResponse> sendAndClose(final HttpClientRequest request);
 
     /**
-     * Attempts to close the client, destroying any connection with its remote
-     * host.
+     * Attempts to close the connection.
      *
      * @return Future completed when closing is done. Can be safely ignored.
      */

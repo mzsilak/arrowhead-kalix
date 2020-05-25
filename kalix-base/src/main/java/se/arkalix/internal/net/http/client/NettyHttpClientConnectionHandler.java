@@ -1,22 +1,25 @@
 package se.arkalix.internal.net.http.client;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import se.arkalix.internal.net.http.NettyHttpBodyReceiver;
+import se.arkalix.internal.net.NettySimpleChannelInboundHandler;
 import se.arkalix.net.http.client.HttpClientConnectionException;
 import se.arkalix.net.http.client.HttpClientResponseException;
 import se.arkalix.util.Result;
 import se.arkalix.util.annotation.Internal;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.*;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
 
-import java.security.cert.X509Certificate;
 import java.util.Objects;
 
 @Internal
-public class NettyHttpClientConnectionHandler extends SimpleChannelInboundHandler<HttpObject> {
+public class NettyHttpClientConnectionHandler extends NettySimpleChannelInboundHandler<HttpObject> {
+    private static final Logger logger = LoggerFactory.getLogger(NettyHttpClientConnectionHandler.class);
+
     private final SslHandler sslHandler;
 
     private FutureHttpClientConnection futureConnection;
@@ -41,25 +44,24 @@ public class NettyHttpClientConnectionHandler extends SimpleChannelInboundHandle
             }
             if (sslHandler != null) {
                 sslHandler.handshakeFuture().addListener(ignored -> {
-                    final var chain = sslHandler.engine().getSession().getPeerCertificates();
-                    final var x509chain = new X509Certificate[chain.length];
-                    for (var i = 0; i < chain.length; ++i) {
-                        final var certificate = chain[i];
-                        if (!(certificate instanceof X509Certificate)) {
-                            futureConnection.setResult(Result.failure(new IllegalStateException("" +
-                                "Only x.509 certificates may be used by " +
-                                "remote peers, somehow the peer at " +
-                                ctx.channel().remoteAddress() + " was able " +
-                                "to use some other type: " + certificate)));
-                            futureConnection = null;
-                            ctx.close();
-                            return;
-                        }
-                        x509chain[i] = (X509Certificate) chain[i];
+                    try {
+                        final var chain = sslHandler.engine().getSession().getPeerCertificates();
+                        connection = new NettyHttpClientConnection(ctx.channel(), chain);
+                        futureConnection.setResult(Result.success(connection));
+                        futureConnection = null;
                     }
-                    connection = new NettyHttpClientConnection(ctx.channel(), x509chain);
-                    futureConnection.setResult(Result.success(connection));
-                    futureConnection = null;
+                    catch (final Throwable throwable) {
+                        if (futureConnection != null) {
+                            futureConnection.setResult(Result.failure(throwable));
+                            futureConnection = null;
+                        }
+                        else {
+                            if (logger.isWarnEnabled()) {
+                                logger.warn("Failed to complete TLS handshake with remote host", throwable);
+                            }
+                        }
+                        ctx.close();
+                    }
                 });
             }
             else {
@@ -86,18 +88,22 @@ public class NettyHttpClientConnectionHandler extends SimpleChannelInboundHandle
         ctx.flush();
         if (body != null) {
             body.finish();
+            body = null;
+        }
+        if (connection != null && connection.isClosing()) {
+            ctx.close();
         }
     }
 
     private void handleResponseHead(final ChannelHandlerContext ctx, final HttpResponse response) {
         // TODO: Enable and check size restrictions.
 
-        final var serviceResponseBody = new NettyHttpBodyReceiver(ctx.alloc(), response.headers());
-        final var serviceResponse = new NettyHttpClientResponse(serviceResponseBody, response);
+        final var clientResponseBody = new NettyHttpBodyReceiver(ctx.alloc(), response.headers());
+        final var clientResponse = new NettyHttpClientResponse(clientResponseBody, response);
 
-        this.body = serviceResponseBody;
+        this.body = clientResponseBody;
 
-        connection.onResponseResult(Result.success(serviceResponse));
+        connection.onResponseResult(Result.success(clientResponse));
     }
 
     private void handleResponseContent(final HttpContent content) {
@@ -107,19 +113,19 @@ public class NettyHttpClientConnectionHandler extends SimpleChannelInboundHandle
         body.append(content);
         if (content instanceof LastHttpContent) {
             body.finish((LastHttpContent) content);
+            body = null;
         }
     }
-
-    // TODO: Bring any response exceptions back to client.
 
     @Override
     public void exceptionCaught(final ChannelHandlerContext ctx, final Throwable cause) {
         if (futureConnection != null) {
             futureConnection.setResult(Result.failure(cause));
+            futureConnection = null;
             return;
         }
-        if (body != null) {
-            body.abort(cause);
+        if (body != null && body.tryAbort(cause)) {
+            body = null;
             return;
         }
         if (connection.onResponseResult(Result.failure(cause))) {
@@ -139,7 +145,8 @@ public class NettyHttpClientConnectionHandler extends SimpleChannelInboundHandle
                 else {
                     final var exception = new HttpClientResponseException("Incoming response body timed out");
                     if (body != null) {
-                        body.abort(exception);
+                        body.tryAbort(exception);
+                        body = null;
                     }
                     else {
                         connection.onResponseResult(Result.failure(exception));

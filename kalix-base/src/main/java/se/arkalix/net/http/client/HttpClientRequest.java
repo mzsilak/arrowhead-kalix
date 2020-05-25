@@ -14,6 +14,7 @@ import java.util.*;
 /**
  * An outgoing HTTP request.
  */
+@SuppressWarnings("UnusedReturnValue")
 public class HttpClientRequest implements HttpBodySender<HttpClientRequest> {
     private final HttpHeaders headers = new HttpHeaders();
     private final Map<String, List<String>> queryParameters = new HashMap<>();
@@ -44,6 +45,13 @@ public class HttpClientRequest implements HttpBodySender<HttpClientRequest> {
     }
 
     @Override
+    public HttpClientRequest body(final DtoEncoding encoding, final List<DtoWritable> data) {
+        this.encoding = encoding;
+        body = data;
+        return this;
+    }
+
+    @Override
     public HttpClientRequest body(final Path path) {
         encoding = null;
         body = path;
@@ -65,8 +73,8 @@ public class HttpClientRequest implements HttpBodySender<HttpClientRequest> {
     }
 
     /**
-     * @return Encoding set with the most recent call to
-     * {@link #body(DtoEncoding, DtoWritable)}, if any.
+     * @return Encoding set with the most recent call to {@link
+     * #body(DtoEncoding, DtoWritable)}, if any.
      */
     public Optional<DtoEncoding> encoding() {
         return Optional.ofNullable(encoding);
@@ -112,7 +120,7 @@ public class HttpClientRequest implements HttpBodySender<HttpClientRequest> {
     }
 
     /**
-     * @return Currently set HTTP method.
+     * @return Currently set HTTP method, if any.
      */
     public Optional<HttpMethod> method() {
         return Optional.ofNullable(method);
@@ -137,7 +145,7 @@ public class HttpClientRequest implements HttpBodySender<HttpClientRequest> {
      */
     public Optional<String> queryParameter(final String name) {
         final var values = queryParameters.get(name);
-        return Optional.ofNullable(values.size() > 0 ? values.get(0) : null);
+        return Optional.ofNullable(values != null && values.size() > 0 ? values.get(0) : null);
     }
 
     /**
@@ -146,9 +154,9 @@ public class HttpClientRequest implements HttpBodySender<HttpClientRequest> {
      *
      * @param name  Name of query parameter. Case sensitive.
      * @param value Desired parameter value.
-     * @return Query parameter value, if a corresponding parameter name exists.
+     * @return This request.
      */
-    public HttpClientRequest queryParameter(final String name, final CharSequence value) {
+    public HttpClientRequest queryParameter(final String name, final Object value) {
         final var list = new ArrayList<String>(1);
         list.add(value.toString());
         queryParameters.put(name, list);
@@ -199,11 +207,19 @@ public class HttpClientRequest implements HttpBodySender<HttpClientRequest> {
 
     /**
      * Sets HTTP version.
+     * <p>
+     * Note that only HTTP/1.0 and HTTP/1.1 are supported by this version of
+     * Kalix.
      *
      * @param version Desired HTTP version.
      * @return This request.
+     * @throws IllegalArgumentException If any other HTTP version than HTTP/1.0
+     *                                  or HTTP/1.1 is provided.
      */
     public HttpClientRequest version(final HttpVersion version) {
+        if (version.major() != 1) {
+            throw new IllegalArgumentException(version + " not supported");
+        }
         this.version = version;
         return this;
     }

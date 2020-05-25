@@ -1,48 +1,39 @@
 package se.arkalix.dto;
 
 import se.arkalix.dto.binary.BinaryWriter;
-import se.arkalix.dto.json.JsonWritable;
+
+import java.util.List;
 
 /**
- * Utilities for encoding DTO classes.
+ * An object useful for writing {@link se.arkalix.dto DTO class instances} to
+ * targets representing their contents with a specific encoding.
  */
-public class DtoWriter {
-    private DtoWriter() {}
+public interface DtoWriter {
+    /**
+     * Attempts to encode {@code value} and write it to {@code target}.
+     *
+     * @param value  Object to encode and write to {@code target}.
+     * @param target Receiver of encoded form of {@code value}.
+     * @throws DtoWriteException             If writing to {@code target} fails.
+     * @throws NullPointerException          If {@code value} or {@code target}
+     *                                       is {@code null}.
+     * @throws UnsupportedOperationException If the DTO interface type of
+     *                                       {@code value} does not support the
+     *                                       encoding of this writer.
+     */
+    <T extends DtoWritable> void writeOne(final T value, final BinaryWriter target) throws DtoWriteException;
 
     /**
-     * Attempts to write {@code t} encoded with {@code encoding} to
-     * {@code target} byte buffer.
+     * Attempts to encode {@code values} and write them to {@code target}.
      *
-     * @param t        Object to encode and write to {@code target}.
-     * @param encoding Encoding to use when writing {@code t}.
-     * @param target   Byte buffer to write encoded form of {@code t} to.
-     * @param <T>      Type of {@code t}.
+     * @param values Objects to encode and write to {@code target}.
+     * @param target Receiver of encoded form of {@code values}.
+     * @throws DtoWriteException             If writing to {@code target} fails.
+     * @throws NullPointerException          If {@code values} or
+     *                                       {@code target} is {@code null}.
      * @throws UnsupportedOperationException If the DTO interface type of
-     *                                       {@code t} does not include the
-     *                                       given {@link DtoEncoding} as
-     *                                       argument to its {@code @Writable}
-     *                                       annotation.
-     * @throws DtoWriteException                If writing to {@code target} fails.
+     *                                       {@code values} does not support
+     *                                       the encoding of this writer.
      */
-    public static <T extends DtoWritable> void write(final T t, final DtoEncoding encoding, final BinaryWriter target)
-        throws DtoWriteException
-    {
-        if (encoding == DtoEncoding.JSON) {
-            if (t instanceof JsonWritable) {
-                ((JsonWritable) t).writeJson(target);
-                return;
-            }
-            throw encodingNotSupportedFor(encoding, t);
-        }
-        throw new IllegalStateException("DataEncoding that is supported has " +
-            "not yet been added to this method");
-    }
-
-    private static RuntimeException encodingNotSupportedFor(final DtoEncoding encoding, final Object object) {
-        return new UnsupportedOperationException("The interface type from " +
-            "which the \"" + object.getClass() + "\" DTO was generated does " +
-            "not include DataEncoding." + encoding + " as argument to its " +
-            "@Writable annotation; no corresponding encoding routine has, " +
-            "consequently, been generated for the class");
-    }
+    <T extends DtoWritable> void writeMany(final List<T> values, final BinaryWriter target) throws DtoWriteException;
 }
