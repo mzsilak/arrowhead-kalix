@@ -1,17 +1,12 @@
 package se.arkalix.internal;
 
-import se.arkalix.ArServiceHandle;
 import se.arkalix.ArService;
+import se.arkalix.ArServiceHandle;
 import se.arkalix.ArSystem;
-import se.arkalix.internal.plugin.PluginNotifier;
 import se.arkalix.util.annotation.Internal;
 import se.arkalix.util.concurrent.Future;
 
-import java.net.InetSocketAddress;
-import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Stream;
+import java.util.Collection;
 
 /**
  * A server, making an {@link ArSystem} able to provide {@link ArService}s
@@ -44,10 +39,10 @@ public interface ArServer {
     Future<ArServiceHandle> provide(ArService service);
 
     /**
-     * @return Stream of handles representing all services currently provided
-     * by this server.
+     * @return Immutable collection of handles representing all services
+     * currently provided by this server.
      */
-    Stream<ArServiceHandle> providedServices();
+    Collection<ArServiceHandle> providedServices();
 
     /**
      * Shuts server down, making it impossible to start it again.

@@ -52,8 +52,8 @@ public class HttpFilter implements HttpRoutable {
     }
 
     /**
-     * @return {@link HttpMethod}, if any, that requests causing thrown
-     * exceptions must match for this filter to be invoked.
+     * @return {@link HttpMethod}, if any, that incoming requests must match
+     * for this filter to be invoked.
      */
     @Override
     public Optional<HttpMethod> method() {
@@ -61,8 +61,8 @@ public class HttpFilter implements HttpRoutable {
     }
 
     /**
-     * @return {@link HttpPattern}, if any, that paths of requests causing
-     * thrown exceptions must match for this filter to be invoked.
+     * @return {@link HttpPattern}, if any, that paths of incoming requests
+     * must match for this filter to be invoked.
      */
     @Override
     public Optional<HttpPattern> pattern() {
@@ -89,7 +89,7 @@ public class HttpFilter implements HttpRoutable {
             final List<String> pathParameters;
             if (pattern != null) {
                 pathParameters = new ArrayList<>(pattern.nParameters());
-                if (!pattern.match(task.request().path(), task.basePath().length(), pathParameters)) {
+                if (!pattern.match(task.request().path(), task.basePathLengthOrZero(), pathParameters)) {
                     break mismatch;
                 }
             }

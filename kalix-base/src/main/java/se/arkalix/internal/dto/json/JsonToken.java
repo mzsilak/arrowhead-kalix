@@ -3,6 +3,7 @@ package se.arkalix.internal.dto.json;
 import se.arkalix.dto.DtoEncoding;
 import se.arkalix.dto.DtoReadException;
 import se.arkalix.dto.binary.BinaryReader;
+import se.arkalix.dto.json.value.JsonString;
 import se.arkalix.dto.json.value.JsonType;
 import se.arkalix.util.annotation.Internal;
 
@@ -10,6 +11,7 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.time.*;
+import java.util.Arrays;
 
 @Internal
 @SuppressWarnings("unused")
@@ -132,15 +134,16 @@ public final class JsonToken {
         error:
         {
             while (p1 < p2) {
-                var b = source.getByte(p1++);
+                var b = source.getByte(p1);
                 if (b == '\\') {
                     // Collect bytes before escape sequence into buffer.
                     {
                         final var length = p1 - p0;
-                        source.getBytes(p0, buffer, b0, length);
-                        b0 += length;
-                        p0 = p1;
-                        p1 += length;
+                        if (length > 0) {
+                            source.getBytes(p0, buffer, b0, length);
+                            b0 += length;
+                        }
+                        p0 = ++p1;
                     }
 
                     if (p1 == p2) {
@@ -165,17 +168,17 @@ public final class JsonToken {
                         final var uBuffer = new byte[4];
                         if (p1 + 4 <= p2) {
                             try {
-                                source.readBytes(uBuffer);
-                                if (uBuffer[0] != '+') {
-                                    final var uString = new String(uBuffer, StandardCharsets.ISO_8859_1);
-                                    final var uNumber = Integer.parseUnsignedInt(uString, 16);
-                                    final var uBytes = Character.toString(uNumber)
-                                        .getBytes(StandardCharsets.ISO_8859_1);
-                                    for (byte uByte : uBytes) {
-                                        buffer[b0++] = uByte;
-                                    }
-                                    continue;
+                                source.getBytes(p1, uBuffer);
+                                final var uString = new String(uBuffer, StandardCharsets.ISO_8859_1);
+                                final var uNumber = Integer.parseUnsignedInt(uString, 16);
+                                final var uBytes = Character.toString(uNumber)
+                                    .getBytes(StandardCharsets.UTF_8);
+                                for (byte uByte : uBytes) {
+                                    buffer[b0++] = uByte;
                                 }
+                                p0 += 5;
+                                p1 += 4;
+                                continue;
                             }
                             catch (final NumberFormatException ignored) {}
                         }
@@ -190,12 +193,24 @@ public final class JsonToken {
                         break error;
                     }
                     buffer[b0++] = b;
+                    p0++;
+                }
+                else {
+                    p1++;
                 }
             }
-            source.getBytes(p0, buffer, b0, p1 - p0);
-            return new String(buffer, StandardCharsets.UTF_8);
+            final var length = p1 - p0;
+            if (length > 0) {
+                source.getBytes(p0, buffer, b0, length);
+                b0 += length;
+            }
+            return new String(b0 < buffer.length
+                ? Arrays.copyOfRange(buffer, 0, b0)
+                : buffer,
+                StandardCharsets.UTF_8);
         }
-        throw new DtoReadException(DtoEncoding.JSON, "Bad escape", badEscapeBuilder.toString(), p1);
+        throw new DtoReadException(JsonString.class, DtoEncoding.JSON,
+            "Bad escape", badEscapeBuilder.toString(), p1);
     }
 
     public String readStringRaw(final BinaryReader source) {
@@ -215,6 +230,10 @@ public final class JsonToken {
 
     public YearMonth readYearMonth(final BinaryReader source) {
         return YearMonth.parse(readStringRaw(source));
+    }
+
+    public ZonedDateTime readZonedDateTime(final BinaryReader source) {
+        return ZonedDateTime.parse(readStringRaw(source));
     }
 
     public ZonedDateTime readZonedDateTimeNumber(final BinaryReader source) {

@@ -26,9 +26,12 @@ public class TestHttpPattern {
 
     static Stream<Arguments> matchingPatternPathParameterSets() {
         return Stream.of(
+            arguments("/", "", new String[0]),
             arguments("/", "/", new String[0]),
             arguments("/hello", "/hello", new String[0]),
+            arguments("/order-summaries", "/order-summaries", new String[0]),
             arguments("/some/path", "/some/path", new String[0]),
+            arguments("/buyer/order-summaries", "/buyer/order-summaries", new String[0]),
             arguments("/#0", "/hello", new String[]{"hello"}),
             arguments("/#@/#%", "/swirl/percent", new String[]{"swirl", "percent"}),
             arguments("/#A/#B/#C", "/x/y/z", new String[]{"x", "y", "z"}),

@@ -14,6 +14,7 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.time.*;
 import java.util.Objects;
+import java.util.Optional;
 
 import static se.arkalix.dto.DtoEncoding.JSON;
 
@@ -190,6 +191,11 @@ public class JsonNumber implements JsonValue {
         return Double.parseDouble(number);
     }
 
+    @Override
+    public Optional<Double> tryToDouble() {
+        return Optional.of(toDouble());
+    }
+
     /**
      * @return This number converted to a {@link Duration}.
      * @throws ArithmeticException If this number is too large.
@@ -237,6 +243,11 @@ public class JsonNumber implements JsonValue {
         return Long.parseLong(number);
     }
 
+    @Override
+    public Optional<Long> tryToLong() {
+        return Optional.of(toLong());
+    }
+
     /**
      * @return This number converted to an {@link OffsetDateTime}.
      * @throws DateTimeException   If this number is too large to be represented
@@ -279,8 +290,8 @@ public class JsonNumber implements JsonValue {
         final var source = buffer.source();
         var token = buffer.next();
         if (token.type() != JsonType.NUMBER) {
-            throw new DtoReadException(DtoEncoding.JSON, "Expected number",
-                token.readStringRaw(source), token.begin());
+            throw new DtoReadException(JsonNumber.class, DtoEncoding.JSON,
+                "expected number", token.readStringRaw(source), token.begin());
         }
         return new JsonNumber(token.readStringRaw(source));
     }

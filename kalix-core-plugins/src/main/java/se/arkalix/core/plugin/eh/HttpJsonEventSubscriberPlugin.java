@@ -4,10 +4,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import se.arkalix.ArSystem;
 import se.arkalix.core.plugin.CloudException;
-import se.arkalix.core.plugin.ErrorException;
+import se.arkalix.core.plugin.ErrorResponseException;
 import se.arkalix.core.plugin.SystemDetails;
 import se.arkalix.core.plugin.SystemDetailsDto;
-import se.arkalix.description.ProviderDescription;
+import se.arkalix.description.SystemDescription;
 import se.arkalix.net.http.HttpStatus;
 import se.arkalix.net.http.service.HttpService;
 import se.arkalix.plugin.Plugin;
@@ -19,6 +19,7 @@ import se.arkalix.util.concurrent.Futures;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -48,7 +49,7 @@ import static se.arkalix.descriptor.EncodingDescriptor.JSON;
 public class HttpJsonEventSubscriberPlugin implements ArEventSubscriberPlugin {
     private static final Logger logger = LoggerFactory.getLogger(HttpJsonEventSubscriberPlugin.class);
 
-    private final ArrayList<EventSubscription> defaultSubscriptions = new ArrayList<>();
+    private final List<EventSubscription> defaultSubscriptions = new CopyOnWriteArrayList<>();
 
     @Override
     public HttpJsonEventSubscriberPlugin subscribe(final EventSubscription subscription) {
@@ -61,7 +62,11 @@ public class HttpJsonEventSubscriberPlugin implements ArEventSubscriberPlugin {
         final ArSystem system,
         final Map<Class<? extends Plugin>, PluginFacade> dependencies)
     {
-        return Future.success(new Attached(system, defaultSubscriptions));
+        logger.info("HTTP/JSON event subscriber attaching to system \"{}\" ...", system.name());
+
+        final var pluginAttached = new Attached(system);
+        return pluginAttached.registerEventReceiver(defaultSubscriptions)
+            .pass(pluginAttached);
     }
 
     private static class Attached implements PluginAttached {
@@ -74,15 +79,15 @@ public class HttpJsonEventSubscriberPlugin implements ArEventSubscriberPlugin {
         private final ConcurrentHashMap<String, Topic> nameToTopic = new ConcurrentHashMap<>();
         private final AtomicBoolean isDetached = new AtomicBoolean(false);
 
-        Attached(final ArSystem system, final ArrayList<EventSubscription> defaultSubscriptions) {
-            logger.info("HTTP/JSON event subscriber attaching to system \"{}\" ...", system.name());
-
+        Attached(final ArSystem system) {
             this.system = system;
             this.subscriber = SystemDetails.from(this.system);
-            this.basePath = "/events/" + this.system.name();
+            this.basePath = "/events/" + system.name();
+        }
 
-            system.consume()
-                .using(HttpJsonEventSubscribeService.factory())
+        private Future<?> registerEventReceiver(final List<EventSubscription> defaultSubscriptions) {
+            return system.consume()
+                .oneUsing(HttpJsonEventSubscribeService.factory())
                 .flatMap(eventSubscribe -> {
                     if (logger.isInfoEnabled()) {
                         final var service = eventSubscribe.service();
@@ -95,7 +100,7 @@ public class HttpJsonEventSubscriberPlugin implements ArEventSubscriberPlugin {
 
                     final var service = new HttpService()
                         .name("event-subscriber")
-                        .basePath(this.basePath)
+                        .basePath(basePath)
                         .accessPolicy(AccessPolicy.whitelist(eventSubscribe.service().provider().name()))
                         .encodings(JSON)
 
@@ -107,7 +112,7 @@ public class HttpJsonEventSubscriberPlugin implements ArEventSubscriberPlugin {
                                         final var topic = nameToTopic.get(topicName.toLowerCase());
                                         if (topic != null) {
                                             final var provider = event.publisher()
-                                                .map(SystemDetails::toProviderDescription)
+                                                .map(SystemDetails::toSystemDescription)
                                                 .orElse(null);
 
                                             topic.publish(provider, event.metadata(), event.data());
@@ -148,7 +153,7 @@ public class HttpJsonEventSubscriberPlugin implements ArEventSubscriberPlugin {
                             "subscriptions", system.name());
                     }
                 })
-                .onFailure(fault -> {
+                .ifFailure(Throwable.class, fault -> {
                     if (logger.isErrorEnabled()) {
                         logger.error("HTTP/JSON event subscriber failed " +
                             "to attach to system \"" + system.name() + "\"", fault);
@@ -191,13 +196,13 @@ public class HttpJsonEventSubscriberPlugin implements ArEventSubscriberPlugin {
                 "\"{}\" to topic \"{}\" ...", system.name(), topicName);
 
             return system.consume()
-                .using(HttpJsonEventSubscribeService.factory())
+                .oneUsing(HttpJsonEventSubscribeService.factory())
                 .flatMap(eventSubscribe -> eventSubscribe.subscribe(request)
-                    .flatMapCatch(ErrorException.class, fault -> {
+                    .flatMapCatch(ErrorResponseException.class, fault -> {
                         final var error = fault.error();
                         if ("INVALID_PARAMETER".equals(error.type())) {
                             return system.consume()
-                                .using(HttpJsonEventUnsubscribeService.factory())
+                                .oneUsing(HttpJsonEventUnsubscribeService.factory())
                                 .flatMap(eventUnsubscribe -> eventUnsubscribe
                                     .unsubscribe(topicName, system))
                                 .flatMap(ignored -> eventSubscribe.subscribe(request))
@@ -228,7 +233,7 @@ public class HttpJsonEventSubscriberPlugin implements ArEventSubscriberPlugin {
                 "system \"{}\" from topic \"{}\" ...", system.name(), topic);
 
             system.consume()
-                .using(HttpJsonEventUnsubscribeService.factory())
+                .oneUsing(HttpJsonEventUnsubscribeService.factory())
                 .flatMap(eventUnsubscribe -> eventUnsubscribe.unsubscribe(topic, system))
                 .ifSuccess(ignored -> logger.info("HTTP/JSON event " +
                     "subscriber unsubscribed system \"{}\" from topic " +
@@ -257,7 +262,7 @@ public class HttpJsonEventSubscriberPlugin implements ArEventSubscriberPlugin {
             }
 
             system.consume()
-                .using(HttpJsonEventUnsubscribeService.factory())
+                .oneUsing(HttpJsonEventUnsubscribeService.factory())
                 .ifSuccess(consumer -> {
                     for (final var topicName : nameToTopic.keySet()) {
                         unsubscribe(topicName);
@@ -297,7 +302,7 @@ public class HttpJsonEventSubscriberPlugin implements ArEventSubscriberPlugin {
             return name;
         }
 
-        public void publish(final ProviderDescription provider, final Map<String, String> metadata, final String data) {
+        public void publish(final SystemDescription provider, final Map<String, String> metadata, final String data) {
             for (final var subscription : handles) {
                 try {
                     subscription.publish(provider, metadata, data);
@@ -328,7 +333,7 @@ public class HttpJsonEventSubscriberPlugin implements ArEventSubscriberPlugin {
     private static class Handle implements EventSubscriptionHandle {
         private final EventSubscriptionHandler handler;
         private final Map<String, String> metadata;
-        private final Set<ProviderDescription> providers;
+        private final Set<SystemDescription> providers;
         private final Consumer<Handle> onUnsubscribe;
         private final AtomicBoolean isUnsubscribed = new AtomicBoolean(false);
 
@@ -347,7 +352,7 @@ public class HttpJsonEventSubscriberPlugin implements ArEventSubscriberPlugin {
             providers = subscription.providers().isEmpty() ? null : subscription.providers();
         }
 
-        public void publish(final ProviderDescription provider, final Map<String, String> metadata, final String data) {
+        public void publish(final SystemDescription provider, final Map<String, String> metadata, final String data) {
             if (providers != null && !providers.contains(provider)) {
                 return;
             }

@@ -12,11 +12,12 @@ import se.arkalix.util.annotation.Internal;
 
 import java.time.*;
 import java.util.Objects;
+import java.util.Optional;
 
 import static se.arkalix.dto.DtoEncoding.JSON;
 
 /**
- * JSON number.
+ * JSON string.
  *
  * @see <a href="https://tools.ietf.org/html/rfc8259">RFC 8259</a>
  */
@@ -176,8 +177,8 @@ public class JsonString implements JsonValue {
         final var source = buffer.source();
         var token = buffer.next();
         if (token.type() != JsonType.STRING) {
-            throw new DtoReadException(DtoEncoding.JSON, "Expected string",
-                token.readStringRaw(source), token.begin());
+            throw new DtoReadException(JsonString.class, DtoEncoding.JSON,
+                "expected string", token.readStringRaw(source), token.begin());
         }
         return new JsonString(token.readString(source));
     }
@@ -205,5 +206,10 @@ public class JsonString implements JsonValue {
     @Override
     public String toString() {
         return string;
+    }
+
+    @Override
+    public Optional<String> tryToString() {
+        return Optional.of(string);
     }
 }

@@ -6,6 +6,8 @@ import io.netty.handler.logging.LoggingHandler;
 import io.netty.handler.ssl.ClientAuth;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import se.arkalix.ArService;
 import se.arkalix.ArServiceHandle;
 import se.arkalix.ArSystem;
@@ -23,17 +25,17 @@ import se.arkalix.util.concurrent.Schedulers;
 import java.util.*;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static se.arkalix.internal.util.concurrent.NettyFutures.adapt;
 
 @Internal
 public class HttpServer implements ArServer {
+    private static final Logger logger = LoggerFactory.getLogger(HttpServer.class);
+
     private final AtomicBoolean isShuttingDown = new AtomicBoolean(false);
 
     private final Set<ArServiceHandle> handles = new HashSet<>();
-    private final Map<String, HttpServiceInternal> services = new ConcurrentSkipListMap<>(Comparator.reverseOrder());
+    private final Map<String, HttpServerService> services = new ConcurrentSkipListMap<>(Comparator.reverseOrder());
 
     private final PluginNotifier pluginNotifier;
     private final ArSystem system;
@@ -66,7 +68,7 @@ public class HttpServer implements ArServer {
                 .handler(new LoggingHandler())
                 .childHandler(new NettyHttpServiceConnectionInitializer(system, server::getServiceByPath, sslContext));
 
-            return adapt(bootstrap.bind(system.localAddress(), system.localPort()))
+            return adapt(bootstrap.bind(system.address(), system.port()))
                 .map(channel -> {
                     server.channel = channel;
                     return server;
@@ -113,23 +115,23 @@ public class HttpServer implements ArServer {
             if (result0.isFailure()) {
                 return Future.failure(result0.fault());
             }
-            final var httpService = new HttpServiceInternal(system, (HttpService) service);
-            final var basePath = httpService.basePath();
+            final var httpService = new HttpServerService(system, (HttpService) service);
+            final var key = httpService.basePath().orElse("/");
 
-            final var existingService = services.putIfAbsent(basePath, httpService);
+            final var existingService = services.putIfAbsent(key, httpService);
             if (existingService != null) {
                 return Future.failure(new IllegalStateException("Base path " +
-                    "(qualifier) \"" + basePath + "\" already in use by  \"" +
+                    "(qualifier) \"" + key + "\" already in use by  \"" +
                     existingService.name() + "\"; cannot provide service \"" +
                     httpService.name() + "\""));
             }
 
             if (isShuttingDown.get()) {
-                services.remove(basePath);
+                services.remove(key);
                 return Future.failure(cannotProvideServiceShuttingDownException(null));
             }
 
-            final var handle = new ServiceHandle(httpService, basePath);
+            final var handle = new ServiceHandle(httpService, key);
 
             return pluginNotifier.onServiceProvided(httpService.description())
                 .mapResult(result1 -> {
@@ -150,19 +152,25 @@ public class HttpServer implements ArServer {
     }
 
     @Override
-    public Stream<ArServiceHandle> providedServices() {
+    public Collection<ArServiceHandle> providedServices() {
         synchronized (handles) {
-            return handles.stream()
-                .collect(Collectors.toUnmodifiableList())
-                .stream();
+            return Collections.unmodifiableCollection(new ArrayList<>(handles));
         }
     }
 
-    private Optional<HttpServiceInternal> getServiceByPath(final String path) {
+    private Optional<HttpServerService> getServiceByPath(final String path) {
         for (final var entry : services.entrySet()) {
             final var service = entry.getValue();
-            if (path.startsWith(service.basePath())) {
+            if (logger.isTraceEnabled()) {
+                logger.trace("Matching " + service.basePath() + " against " + path);
+            }
+            if (service.basePath().map(path::startsWith).orElse(true)) {
+                if (logger.isTraceEnabled()) {
+                    logger.trace("Matched " + service.basePath() + " of " + service);
+                }
                 return Optional.of(service);
+            } else if (logger.isTraceEnabled()) {
+                logger.trace("Failed to match " + service.basePath() + " against " + path);
             }
         }
         return Optional.empty();
@@ -173,22 +181,21 @@ public class HttpServer implements ArServer {
         if (isShuttingDown.getAndSet(true)) {
             return Future.done();
         }
-        synchronized (handles) {
-            for (final var handle : handles) {
-                handle.dismiss();
-            }
+        for (final var handle : handles) {
+            handle.dismiss();
         }
+        handles.clear();
         return adapt(channel.close());
     }
 
     private class ServiceHandle implements ArServiceHandle {
-        private final HttpServiceInternal httpService;
+        private final HttpServerService httpService;
         private final AtomicBoolean isDismissed = new AtomicBoolean(false);
-        private final String basePath;
+        private final String key;
 
-        public ServiceHandle(final HttpServiceInternal httpService, final String basePath) {
+        public ServiceHandle(final HttpServerService httpService, final String key) {
             this.httpService = httpService;
-            this.basePath = basePath;
+            this.key = key;
         }
 
         @Override
@@ -200,9 +207,11 @@ public class HttpServer implements ArServer {
         public void dismiss() {
             if (!isDismissed.getAndSet(true)) {
                 pluginNotifier.onServiceDismissed(description());
-                services.remove(basePath);
-                synchronized (handles) {
-                    handles.remove(this);
+                services.remove(key);
+                if (!isShuttingDown.get()) {
+                    synchronized (handles) {
+                        handles.remove(this);
+                    }
                 }
             }
         }

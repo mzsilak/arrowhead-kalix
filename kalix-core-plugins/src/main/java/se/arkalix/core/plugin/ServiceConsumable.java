@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static se.arkalix.dto.DtoEncoding.JSON;
 
@@ -24,6 +25,7 @@ import static se.arkalix.dto.DtoEncoding.JSON;
 @DtoReadableAs(JSON)
 @DtoEqualsHashCode
 @DtoToString
+@SuppressWarnings("unused")
 public interface ServiceConsumable {
     /**
      * Service name.
@@ -99,7 +101,7 @@ public interface ServiceConsumable {
      *                          #provider()}, if any, is not supported.
      */
     default ServiceDescription toServiceDescription() {
-        final var provider = provider().toProviderDescription();
+        final var provider = provider().toSystemDescription();
         if (!provider.isSecure() && security().isSecure()) {
             throw new IllegalStateException("The description of the \"" +
                 name().name() + "\" service implies that it is served over " +
@@ -116,11 +118,11 @@ public interface ServiceConsumable {
             .security(security())
             .metadata(metadata())
             .version(version())
-            .interfaces(interfaces()
-                .stream()
-                .map(InterfaceName::name)
-                .collect(Collectors.toList()))
-            .interfaceTokens(tokens())
+            .interfaceTokens(Stream.concat(
+                interfaces().stream().map(i -> Map.entry(i.name(), "")),
+                tokens().entrySet().stream())
+                .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, Map.Entry::getValue,
+                    (a, b) -> a.isBlank() ? b : a)))
             .build();
     }
 }

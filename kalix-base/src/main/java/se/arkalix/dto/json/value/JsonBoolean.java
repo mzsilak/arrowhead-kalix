@@ -9,6 +9,8 @@ import se.arkalix.internal.dto.json.JsonTokenBuffer;
 import se.arkalix.internal.dto.json.JsonTokenizer;
 import se.arkalix.util.annotation.Internal;
 
+import java.util.Optional;
+
 import static se.arkalix.dto.DtoEncoding.JSON;
 
 /**
@@ -43,6 +45,11 @@ public class JsonBoolean implements JsonValue {
         return JsonType.FALSE;
     }
 
+    @Override
+    public Optional<Boolean> tryToBoolean() {
+        return Optional.of(value);
+    }
+
     /**
      * @return {@code true} or {@code false}.
      */
@@ -75,8 +82,8 @@ public class JsonBoolean implements JsonValue {
         case TRUE: return TRUE;
         case FALSE: return FALSE;
         default:
-            throw new DtoReadException(DtoEncoding.JSON, "Expected true or false",
-                token.readStringRaw(buffer.source()), token.begin());
+            throw new DtoReadException(JsonBoolean.class, DtoEncoding.JSON,
+                "expected 'true' or 'false'", token.readStringRaw(buffer.source()), token.begin());
         }
     }
 

@@ -32,8 +32,8 @@ public class HttpRouteSequence {
     public HttpRouteSequence(
         final HttpFilter[] filters,
         final HttpRoute route,
-        final HttpCatcher<?>[] catchers)
-    {
+        final HttpCatcher<?>[] catchers
+    ) {
         this.filters = filters;
         this.route = route;
         this.catchers = catchers;
@@ -70,7 +70,7 @@ public class HttpRouteSequence {
                                     .map(Object::toString)
                                     .orElse("<?>") +
                                 ' ' +
-                                task.basePath() +
+                                task.basePath().orElse("") +
                                 route.pattern()
                                     .map(Object::toString)
                                     .orElse("") +

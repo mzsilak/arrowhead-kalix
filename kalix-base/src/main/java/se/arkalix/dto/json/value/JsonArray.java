@@ -14,13 +14,13 @@ import java.util.*;
 import static se.arkalix.dto.DtoEncoding.JSON;
 
 /**
- * A JSON array.
+ * JSON array.
  *
  * @see <a href="https://tools.ietf.org/html/rfc8259">RFC 8259</a>
  */
 @DtoExclusive(JSON)
 @SuppressWarnings("unused")
-public class JsonArray implements JsonCollection, Iterable<JsonValue> {
+public class JsonArray implements JsonCollection<Integer>, Iterable<JsonValue> {
     private final List<JsonValue> elements;
 
     /**
@@ -58,6 +58,13 @@ public class JsonArray implements JsonCollection, Iterable<JsonValue> {
         return elements.size();
     }
 
+    @Override
+    public Optional<JsonValue> get(final Integer index) {
+        return (index < 0 || index > elements.size() - 1)
+            ? Optional.empty()
+            : Optional.of(elements.get(index));
+    }
+
     /**
      * @return Array elements.
      */
@@ -93,7 +100,8 @@ public class JsonArray implements JsonCollection, Iterable<JsonValue> {
         final var source = buffer.source();
         var token = buffer.next();
         if (token.type() != JsonType.ARRAY) {
-            throw new DtoReadException(JSON, "Expected array", token.readStringRaw(source), token.begin());
+            throw new DtoReadException(JsonArray.class, JSON, "expected array",
+                token.readStringRaw(source), token.begin());
         }
         final var elements = new ArrayList<JsonValue>(token.nChildren());
         for (var n = token.nChildren(); n-- != 0; ) {

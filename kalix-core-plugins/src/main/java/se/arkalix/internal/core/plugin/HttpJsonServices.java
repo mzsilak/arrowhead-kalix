@@ -1,10 +1,10 @@
 package se.arkalix.internal.core.plugin;
 
-import se.arkalix.core.plugin.Error;
-import se.arkalix.core.plugin.ErrorDto;
+import se.arkalix.core.plugin.ErrorResponseDto;
+import se.arkalix.core.plugin.ErrorResponseException;
 import se.arkalix.dto.DtoReadable;
+import se.arkalix.net.http.HttpIncomingResponse;
 import se.arkalix.net.http.HttpStatus;
-import se.arkalix.net.http.consumer.HttpConsumerResponse;
 import se.arkalix.util.annotation.Internal;
 import se.arkalix.util.concurrent.Future;
 
@@ -15,7 +15,7 @@ import static se.arkalix.dto.DtoEncoding.JSON;
 
 @Internal
 public class HttpJsonServices {
-    public static Future<?> unwrap(final HttpConsumerResponse response) {
+    public static Future<?> unwrap(final HttpIncomingResponse response) {
         Objects.requireNonNull(response, "Expected response");
 
         if (response.status().isSuccess()) {
@@ -24,7 +24,7 @@ public class HttpJsonServices {
         return handleError(response);
     }
 
-    public static <T extends DtoReadable> Future<T> unwrap(final HttpConsumerResponse response, final Class<T> class_) {
+    public static <T extends DtoReadable> Future<T> unwrap(final HttpIncomingResponse response, final Class<T> class_) {
         Objects.requireNonNull(response, "Expected response");
         Objects.requireNonNull(class_, "Expected class");
 
@@ -35,7 +35,7 @@ public class HttpJsonServices {
     }
 
     public static <T extends DtoReadable> Future<Optional<T>> unwrapOptional(
-        final HttpConsumerResponse response,
+        final HttpIncomingResponse response,
         final Class<T> class_)
     {
         Objects.requireNonNull(response, "Expected response");
@@ -52,12 +52,12 @@ public class HttpJsonServices {
         return handleError(response);
     }
 
-    private static <T> Future<T> handleError(final HttpConsumerResponse response) {
+    private static <T> Future<T> handleError(final HttpIncomingResponse response) {
         if (response.status().isClientError()) {
             final var headers = response.headers();
             if (headers.get("content-type").orElse("").startsWith("application/json")) {
-                return response.bodyAs(JSON, ErrorDto.class)
-                    .mapThrow(Error::toException);
+                return response.bodyAs(JSON, ErrorResponseDto.class)
+                    .mapThrow(error -> new ErrorResponseException(response, error));
             }
         }
         return Future.failure(response.reject());

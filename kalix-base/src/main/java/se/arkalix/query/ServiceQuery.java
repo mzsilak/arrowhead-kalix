@@ -11,6 +11,7 @@ import se.arkalix.util.concurrent.Future;
 import se.arkalix.util.function.ThrowingFunction;
 
 import java.util.*;
+import java.util.stream.Stream;
 
 /**
  * A description of an Arrowhead service some {@link ArSystem} wishes to
@@ -26,18 +27,20 @@ import java.util.*;
  *         creation}. How much information is required will depend on the used
  *         resolution strategy, which might vary from just the name of the
  *         service to all possible details about it.</li>
- *     <li>One out of the methods {@link ServiceQuery#using(ArConsumerFactory)
- *         using()}, {@link ServiceQuery#resolveAll() resolveAll()} and {@link
- *         ServiceQuery#resolveOne() resolveOne()} are used to complete the
- *         query and start service resolution. If the {@link
- *         ServiceQuery#using(ArConsumerFactory) using()} method is used, the
- *         provided factory automatically provides additional details to the
- *         query before it is executed. Make sure to read the documentation for
- *         the {@link ArConsumerFactory} you want to use with that method in
- *         order to be certain about what details will be automatically
- *         provided. {@link ArConsumerFactory} classes representing specific
- *         Arrowhead services typically require no query information to be
- *         explicitly specified at all.
+ *     <li>One out of the methods {@link ServiceQuery#allUsing(ArConsumerFactory)
+ *         allUsing()} {@link ServiceQuery#oneUsing(ArConsumerFactory)
+ *         oneUsing()}, {@link ServiceQuery#resolveAll() resolveAll()} and
+ *         {@link ServiceQuery#resolveOne() resolveOne()} are used to complete
+ *         the query and start service resolution. If any of the {@link
+ *         ServiceQuery#oneUsing(ArConsumerFactory) oneUsing()} or {@link
+ *         ServiceQuery#allUsing(ArConsumerFactory) allUsing()} method are
+ *         used, the provided factory automatically provides additional details
+ *         to the query before it is executed. Make sure to read the
+ *         documentation for the {@link ArConsumerFactory} you want to use with
+ *         that method in order to be certain about what details will be
+ *         automatically provided. {@link ArConsumerFactory} classes
+ *         representing specific Arrowhead services typically require no query
+ *         information to be explicitly specified at all.
  *     </li>
  * </ol>
  */
@@ -62,8 +65,8 @@ public class ServiceQuery {
      */
     public ServiceQuery(
         final ArSystem consumer,
-        final ThrowingFunction<ServiceQuery, Future<Set<ServiceDescription>>> resolver)
-    {
+        final ThrowingFunction<ServiceQuery, Future<Set<ServiceDescription>>> resolver
+    ) {
         this.consumer = Objects.requireNonNull(consumer, "Expected consumer");
         this.resolver = Objects.requireNonNull(resolver, "Expected resolver");
     }
@@ -216,7 +219,29 @@ public class ServiceQuery {
     /**
      * Uses provided {@code factory} to (1) add additional details to this
      * query, (2) resolve the query, and then (3) use the resolution result to
-     * construct an {@link ArConsumer} instance, which may be used to consume
+     * construct a stream of {@link ArConsumer} instances, which may be used to
+     * consume those service by exchanging messages with them.
+     *
+     * @param factory Class useful for creating {@link ArConsumer} instances.
+     * @param <C>     Type of {@link ArConsumer}.
+     * @return {@link Future} completed with {@link ArConsumer}, if service
+     * resolution succeeded.
+     * @see se.arkalix.net.http.consumer
+     */
+    public <C extends ArConsumer> Future<Stream<C>> allUsing(final ArConsumerFactory<C> factory) {
+        final var throwable = updateAndValidateUsing(factory);
+        if (throwable != null) {
+            return Future.failure(throwable);
+        }
+        return resolveAll()
+            .map(services -> services.stream()
+                .map(service -> factory.create(consumer, service, encodings)));
+    }
+
+    /**
+     * Uses provided {@code factory} to (1) add additional details to this
+     * query, (2) resolve the query, and then (3) use the resolution result to
+     * construct one {@link ArConsumer} instance, which may be used to consume
      * the service by exchanging messages with it.
      *
      * @param factory Class useful for creating {@link ArConsumer} instances.
@@ -225,16 +250,26 @@ public class ServiceQuery {
      * resolution succeeded. If service resolution did not fail but yielded no
      * matching services, the {@link Future} is failed with a {@link
      * ServiceNotFoundException}.
+     * @see se.arkalix.net.http.consumer
      */
-    public <C extends ArConsumer> Future<C> using(final ArConsumerFactory<C> factory) {
+    public <C extends ArConsumer> Future<C> oneUsing(final ArConsumerFactory<C> factory) {
+        final var throwable = updateAndValidateUsing(factory);
+        if (throwable != null) {
+            return Future.failure(throwable);
+        }
+        return resolveOne()
+            .map(service -> factory.create(consumer, service, encodings));
+    }
+
+    private Throwable updateAndValidateUsing(final ArConsumerFactory<?> factory) {
         // Set and check service name.
         final var optionalName = factory.serviceName();
         if (name == null) {
             if (optionalName.isEmpty()) {
-                return Future.failure(new IllegalStateException("No service " +
+                return new IllegalStateException("No service " +
                     "name was specified, neither explicitly or by the " +
                     "provided consumer factory \"" + factory + "\"; cannot " +
-                    "resolve service"));
+                    "resolve service");
             }
             name = optionalName.get();
         }
@@ -242,11 +277,11 @@ public class ServiceQuery {
             if (optionalName.isPresent()) {
                 final var name0 = optionalName.get();
                 if (!name.equals(name0)) {
-                    return Future.failure(new IllegalStateException("The " +
+                    return new IllegalStateException("The " +
                         "service name \"" + name + "\" was explicitly " +
                         "specified, but the provided consumer factory \"" +
                         factory + "\" requires that the name \"" + name0
-                        + "\" be used; cannot resolve service"));
+                        + "\" be used; cannot resolve service");
                 }
             }
         }
@@ -261,14 +296,14 @@ public class ServiceQuery {
             transports.retainAll(factory.serviceTransports());
         }
         if (transports.isEmpty()) {
-            return Future.failure(new IllegalStateException("The provided " +
+            return new IllegalStateException("The provided " +
                 "consumer factory \"" + factory + "\" only supports the " +
                 "following application-level transport protocols: " +
                 factory.serviceTransports() + ", while this query was " +
                 "already configured to require that any out of " +
                 currentTransports + " be supported; no factory-" +
                 "supported transports are present in the existing " +
-                "collection; cannot resolve service"));
+                "collection; cannot resolve service");
         }
 
         // Set and check service encodings.
@@ -280,13 +315,13 @@ public class ServiceQuery {
             encodings.retainAll(factory.serviceEncodings());
         }
         if (encodings.isEmpty()) {
-            return Future.failure(new IllegalStateException("The provided " +
+            return new IllegalStateException("The provided " +
                 "consumer factory \"" + factory + "\" only supports the " +
                 "following encodings: " + factory.serviceEncodings() + ", " +
                 "while this query was already configured to require that " +
                 "any out of " + currentEncodings + " be supported; no " +
                 "factory-supported encodings are present in the existing " +
-                "collection; cannot resolve service"));
+                "collection; cannot resolve service");
         }
 
         // Set and check service metadata.
@@ -305,12 +340,12 @@ public class ServiceQuery {
                     return null;
                 });
                 if (value2 == null) {
-                    return Future.failure(new IllegalStateException("The " +
+                    return new IllegalStateException("The " +
                         "provided consumer factory \"" + factory + "\" " +
                         "requires that the metadata field \"" + key0 + "\" " +
                         "be set to \"" + value0 + "\", but the field has " +
                         "been explicitly set to \"" + metadata.get(key0) +
-                        "\"; cannot create consumer"));
+                        "\"; cannot create consumer");
                 }
             }
         }
@@ -318,10 +353,10 @@ public class ServiceQuery {
         // Set and check service version.
         final var version0 = factory.serviceVersion().orElse(null);
         if (!Objects.equals(version, version0)) {
-            return Future.failure(new IllegalStateException("The provided " +
+            return new IllegalStateException("The provided " +
                 "consumer factory \"" + factory + "\" only supports service " +
                 "version " + version0 + ", while version " + version +
-                " was explicitly specified; cannot create consumer"));
+                " was explicitly specified; cannot create consumer");
         }
         version = version0;
 
@@ -349,13 +384,13 @@ public class ServiceQuery {
             versionMax1 = Integer.MAX_VALUE;
         }
         if (versionMin1 > versionMax1) {
-            return Future.failure(new IllegalStateException("The provided " +
+            return new IllegalStateException("The provided " +
                 "consumer factory \"" + factory + "\" only supports service " +
                 "versions in the range " + versionMin0 + ".." + versionMax0 +
                 ", while the non-overlapping range " +
                 (versionMin != null ? versionMin : "") + ".." +
                 (versionMax != null ? versionMax : "") + " was " +
-                "explicitly specified; cannot create consumer"));
+                "explicitly specified; cannot create consumer");
         }
         if (versionMax1 != Integer.MAX_VALUE) {
             versionMax = versionMax1;
@@ -364,23 +399,23 @@ public class ServiceQuery {
             versionMin = versionMin1;
         }
         if (version != null && (version < versionMin1 || version > versionMax1)) {
-            return Future.failure(new IllegalStateException("Taken " +
+            return new IllegalStateException("Taken " +
                 "together, the service versions supported by both the " +
                 "provided consumer factory \"" + factory + "\" and the " +
                 "explicitly provided versions are in the range " +
                 versionMin1 + ".." + versionMax1 + ", but the " +
                 (version0 == null ? "explicitly provided version " :
                     "version required by the consumer factory ") + version
-                + " is not in that range; cannot create consumer"));
+                + " is not in that range; cannot create consumer");
         }
 
-        return resolveOne().map(service -> factory.create(consumer, service, encodings));
+        return null;
     }
 
     /**
      * Uses resolver provided at {@link
      * ServiceQuery#ServiceQuery(ArSystem, ThrowingFunction) instance creation}
-     * to lookup services matching this query.
+     * to lookup all services matching this query.
      *
      * @return {@link Future} completed, if successful, with a set of service
      * descriptions matching this query.
@@ -466,5 +501,20 @@ public class ServiceQuery {
         }
 
         return service.security().isSecure() == isSecure();
+    }
+
+    @Override
+    public String toString() {
+        return "ServiceQuery{" +
+            "consumer=" + consumer +
+            ", resolver=" + resolver +
+            ", name='" + name + '\'' +
+            ", encodings=" + encodings +
+            ", transports=" + transports +
+            ", metadata=" + metadata +
+            ", version=" + version +
+            ", versionMax=" + versionMax +
+            ", versionMin=" + versionMin +
+            '}';
     }
 }

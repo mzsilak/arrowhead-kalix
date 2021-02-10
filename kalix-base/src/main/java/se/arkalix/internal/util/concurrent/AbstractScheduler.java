@@ -1,17 +1,28 @@
 package se.arkalix.internal.util.concurrent;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import se.arkalix.util.Result;
 import se.arkalix.util.annotation.Internal;
 import se.arkalix.util.concurrent.Future;
 import se.arkalix.util.concurrent.Scheduler;
+import se.arkalix.util.concurrent.SchedulerShutdownListener;
 
 import java.time.Duration;
+import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Internal
 abstract class AbstractScheduler implements Scheduler {
+    private static final Logger logger = LoggerFactory.getLogger(AbstractScheduler.class);
+
+    private final AtomicBoolean isShuttingDown = new AtomicBoolean(false);
+    private final Set<SchedulerShutdownListener> shutdownListeners = new CopyOnWriteArraySet<>();
+
     protected abstract ScheduledExecutorService executor();
 
     @Override
@@ -34,7 +45,7 @@ abstract class AbstractScheduler implements Scheduler {
                 }
                 adapter.complete(result);
             });
-            adapter.setCancelFunction(future::cancel);
+            adapter.setCancelCallback(future::cancel);
             return adapter;
         }
         catch (final Throwable throwable) {
@@ -56,7 +67,7 @@ abstract class AbstractScheduler implements Scheduler {
                 }
                 adapter.complete(result);
             });
-            adapter.setCancelFunction(future::cancel);
+            adapter.setCancelCallback(future::cancel);
             return adapter;
         }
         catch (final Throwable throwable) {
@@ -79,7 +90,7 @@ abstract class AbstractScheduler implements Scheduler {
                 }
                 adapter.complete(result0);
             });
-            adapter.setCancelFunction(future::cancel);
+            adapter.setCancelCallback(future::cancel);
             return adapter;
         }
         catch (final Throwable throwable) {
@@ -102,7 +113,7 @@ abstract class AbstractScheduler implements Scheduler {
                 }
                 adapter.complete(result0);
             }, delay.toMillis(), TimeUnit.MILLISECONDS);
-            adapter.setCancelFunction(future::cancel);
+            adapter.setCancelCallback(future::cancel);
             return adapter;
         }
         catch (final Throwable throwable) {
@@ -124,7 +135,7 @@ abstract class AbstractScheduler implements Scheduler {
                 }
                 adapter.complete(result0);
             }, delay.toMillis(), TimeUnit.MILLISECONDS);
-            adapter.setCancelFunction(future::cancel);
+            adapter.setCancelCallback(future::cancel);
             return adapter;
         }
         catch (final Throwable throwable) {
@@ -145,7 +156,7 @@ abstract class AbstractScheduler implements Scheduler {
                     adapter.cancel(false);
                 }
             }, initialDelay.toMillis(), rate.toMillis(), TimeUnit.MILLISECONDS);
-            adapter.setCancelFunction(future::cancel);
+            adapter.setCancelCallback(future::cancel);
             return adapter;
         }
         catch (final Throwable throwable) {
@@ -166,7 +177,7 @@ abstract class AbstractScheduler implements Scheduler {
                     adapter.cancel(false);
                 }
             }, initalDelay.toMillis(), delay.toMillis(), TimeUnit.MILLISECONDS);
-            adapter.setCancelFunction(future::cancel);
+            adapter.setCancelCallback(future::cancel);
             return adapter;
         }
         catch (final Throwable throwable) {
@@ -174,5 +185,43 @@ abstract class AbstractScheduler implements Scheduler {
         }
     }
 
-    public abstract void shutdown();
+    @Override
+    public boolean isShuttingDown() {
+        return isShuttingDown.get();
+    }
+
+    public void shutdown() {
+        if (isShuttingDown.getAndSet(true)) {
+            throw new IllegalStateException("Already shutting down");
+        }
+        executor().execute(this::notifyShutdownListeners);
+        executor().shutdown();
+    }
+
+    protected void notifyShutdownListeners() {
+        for (final var listener : shutdownListeners) {
+            try {
+                listener.onShutdown(this);
+            }
+            catch (final Throwable throwable) {
+                logger.error("Unexpected shutdown listener exception caught", throwable);
+            }
+        }
+    }
+
+    @Override
+    public void addShutdownListener(final SchedulerShutdownListener listener) {
+        if (isShuttingDown.get()) {
+            throw new IllegalStateException("Already shutting down");
+        }
+        shutdownListeners.add(listener);
+    }
+
+    @Override
+    public void removeShutdownListener(final SchedulerShutdownListener listener) {
+        if (isShuttingDown.get()) {
+            throw new IllegalStateException("Already shutting down");
+        }
+        shutdownListeners.remove(listener);
+    }
 }

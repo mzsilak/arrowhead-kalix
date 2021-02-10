@@ -5,6 +5,7 @@ import se.arkalix.util.Result;
 import se.arkalix.util.annotation.ThreadSafe;
 
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -24,12 +25,14 @@ public class FutureAnnouncement<V> {
     private final Set<FutureCompletion<V>> subscribers = new HashSet<>();
 
     private Result<V> result = null;
+    private boolean isAnnouncing = false;
 
     FutureAnnouncement(final Future<V> future) {
         this.future = future;
         future.onResult(result -> {
             synchronized (this) {
                 this.result = result;
+                isAnnouncing = true;
                 for (final var subscriber : subscribers) {
                     subscriber.complete(result);
                 }
@@ -54,8 +57,18 @@ public class FutureAnnouncement<V> {
      *                              tasks are allowed to complete. This
      *                              parameter may be ignored.
      */
-    void cancel(final boolean mayInterruptIfRunning) {
+    public void cancel(final boolean mayInterruptIfRunning) {
         future.cancel(mayInterruptIfRunning);
+    }
+
+    /**
+     * Gets the result of this {@code FutureAnnouncement} if it already is
+     * available.
+     *
+     * @return Result of this {@code FutureAnnouncement}, if available.
+     */
+    public synchronized Optional<Result<V>> resultIfAvailable() {
+        return Optional.ofNullable(result);
     }
 
     /**
@@ -79,14 +92,16 @@ public class FutureAnnouncement<V> {
             if (result != null) {
                 return Future.of(result);
             }
-            completion = new FutureCompletion<V>();
+            completion = new FutureCompletion<>();
+            completion.setCancelCallback(ignored -> {
+                synchronized (this) {
+                    if (!isAnnouncing) {
+                        subscribers.remove(completion);
+                    }
+                }
+            });
             subscribers.add(completion);
         }
-        completion.setCancelFunction(ignored -> {
-            synchronized (this) {
-                subscribers.remove(completion);
-            }
-        });
         return completion;
     }
 }
